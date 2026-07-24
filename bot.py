@@ -20,10 +20,12 @@ if not GEMINI_API_KEY:
 if not TELEGRAM_TOKEN:
     raise ValueError("ERROR: No se encontró TELEGRAM_TOKEN. Revisa tu archivo .env")
 
+"""
 client = genai.Client(api_key=GEMINI_API_KEY)
 print("Modelos disponibles para tu cuenta:")
 for modelo in client.models.list():
     print(f"- {modelo.name}")
+"""
 
 # --- CONFIGURACIÓN DE BASE DE DATOS ---
 DB_FILE = 'vocabulario.db'
