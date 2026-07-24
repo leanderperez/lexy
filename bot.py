@@ -1,6 +1,7 @@
 import os
 import sqlite3
 import asyncio
+import re
 from datetime import datetime, time
 from dotenv import load_dotenv
 from telegram import Update
@@ -228,10 +229,17 @@ async def process_interaction(update: Update, context: ContextTypes.DEFAULT_TYPE
             output_audio_path = f"response_{user_id}.mp3"
             
             # Limpiar el texto para que el TTS no lea etiquetas HTML o Markdown
-            texto_limpio = texto_salida.replace('<tg-spoiler>', '').replace('</tg-spoiler>', '').replace('*', '')
+            await context.bot.send_chat_action(chat_id=chat_id, action='record_voice')
+            output_audio_path = f"response_{user_id}.mp3"
+            
+            # NUEVA LÍNEA: Elimina completamente la etiqueta <tg-spoiler> y todo lo que esté adentro
+            texto_limpio = re.sub(r'<tg-spoiler>.*?</tg-spoiler>', '', texto_salida, flags=re.DOTALL)
+            
+            # Limpiamos asteriscos o espacios sobrantes para que el TTS no se confunda
+            texto_limpio = texto_limpio.replace('*', '').strip()
             
             # Un -25% de velocidad equivale a 0.75x
-            tts = edge_tts.Communicate(texto_limpio, voice="zh-TW-HsiaoChenNeural", rate="-25%")
+            tts = edge_tts.Communicate(texto_limpio, voice="zh-CN-XiaoxiaoNeural", rate="-25%")
             await tts.save(output_audio_path)
             
             with open(output_audio_path, "rb") as audio:
