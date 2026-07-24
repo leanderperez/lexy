@@ -4,7 +4,7 @@ import asyncio
 from dotenv import load_dotenv
 from telegram import Update
 from telegram.ext import Application, MessageHandler, CommandHandler, filters, ContextTypes
-import google.generativeai as genai
+from google import genai
 import edge_tts
 
 # --- CONFIGURACIÓN DE APIS ---
@@ -12,8 +12,7 @@ import edge_tts
 GEMINI_API_KEY = os.getenv("GEMINI")
 TELEGRAM_TOKEN = os.getenv("LEXY")
 
-genai.configure(api_key=GEMINI_API_KEY)
-model = genai.GenerativeModel('gemini-1.5-flash')
+client = genai.Client(api_key=GEMINI_API_KEY)
 
 # --- CONFIGURACIÓN DE BASE DE DATOS ---
 DB_FILE = 'vocabulario.db'
@@ -111,7 +110,7 @@ async def process_interaction(update: Update, context: ContextTypes.DEFAULT_TYPE
     current_mode = user_states.get(user_id, 'dialogo')
     
     if user_id not in user_sessions:
-        user_sessions[user_id] = model.start_chat(history=[])
+        user_sessions[user_id] = client.chats.create(model='gemini-1.5-flash')
     
     chat_session = user_sessions[user_id]
     
@@ -165,12 +164,12 @@ async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await voice_file.download_to_drive(input_audio_path)
     
     # Subir a Gemini
-    audio_part = genai.upload_file(input_audio_path)
+    audio_part = client.files.upload(file=input_audio_path)
     
     await process_interaction(update, context, audio_part, is_audio=True)
     
     # Limpieza
-    genai.delete_file(audio_part.name)
+    client.files.delete(name=audio_part.name)
     os.remove(input_audio_path)
 
 def main():
