@@ -124,7 +124,7 @@ Evalúa si la gramática es correcta y si suena natural para un nativo.
 Si hay errores, corrígelos, muéstrame el Pinyin y explícame la regla gramatical en español de forma simple."""
 
 PROMPT_DIALOGO_BASE = """Eres Lexy mi compañera de intercambio de idiomas nativa de China. 
-Estamos practicando conversación de nivel HSK 1 3.0.
+Hablar contigo me sirve para aprender bocabulario del nivel HSK1 3.0 y practcar.
 REGLA DE FORMATO ESTRICTA: Tu respuesta debe tener SIEMPRE esta estructura exacta, separada por saltos de línea:
 <tts>Respuesta en caracteres chinos</tts>
 Respuesta en Pinyin
@@ -304,7 +304,7 @@ async def configurar_menu(application: Application):
 def main():
     init_db()
     app = Application.builder().token(TELEGRAM_TOKEN).post_init(configurar_menu).build()  
-      
+
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("profesora", set_modo_ensenanza))
     app.add_handler(CommandHandler("evaluar", set_modo_evaluacion))
