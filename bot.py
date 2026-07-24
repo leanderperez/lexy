@@ -23,11 +23,10 @@ if not TELEGRAM_TOKEN:
     raise ValueError("ERROR: No se encontró TELEGRAM_TOKEN. Revisa tu archivo .env")
 
 client = genai.Client(api_key=GEMINI_API_KEY)
-"""
+
 print("Modelos disponibles para tu cuenta:")
 for modelo in client.models.list():
     print(f"- {modelo.name}")
-"""
 
 # --- CONFIGURACIÓN DE BASE DE DATOS ---
 DB_FILE = 'vocabulario.db'
@@ -184,7 +183,7 @@ async def escribir_proactivamente(context: ContextTypes.DEFAULT_TYPE):
             historial = recuperar_historial(chat_id, limite=5)
             prompt_proactivo = "Eres Lexy. El usuario no te ha hablado en un buen rato. Escríbele un mensaje corto para sacarle conversación. REGLA ESTRICTA DE FORMATO: Responde exactamente con 3 líneas: la primera con caracteres chinos envueltos en <tts></tts>, la segunda con el pinyin, y la tercera con español."
             
-            sesion_temporal = client.chats.create(model='gemini-2.5-flash', history=historial)
+            sesion_temporal = client.chats.create(model='gemini-3.5-flash-lite', history=historial)
             respuesta = sesion_temporal.send_message(prompt_proactivo)
             texto_salida = respuesta.text
             
@@ -220,14 +219,14 @@ async def process_interaction(update: Update, context: ContextTypes.DEFAULT_TYPE
     current_mode = user_states.get(user_id, 'dialogo')
     
     if current_mode != 'dialogo' and user_id not in user_sessions:
-        user_sessions[user_id] = client.chats.create(model='gemini-2.5-flash')
+        user_sessions[user_id] = client.chats.create(model='gemini-3.5-flash-lite')
         
     chat_session = user_sessions.get(user_id)
     if current_mode == 'dialogo':
         palabras_a_practicar = ", ".join(obtener_palabras_recientes(5))
         prompt_dinamico = PROMPT_DIALOGO_BASE.format(palabras_objetivo=palabras_a_practicar)
         historial = recuperar_historial(chat_id)
-        chat_session = client.chats.create(model='gemini-2.5-flash', history=historial, config={'system_instruction': prompt_dinamico})
+        chat_session = client.chats.create(model='gemini-3.5-flash-lite', history=historial, config={'system_instruction': prompt_dinamico})
         user_sessions[user_id] = chat_session
 
     await context.bot.send_chat_action(chat_id=chat_id, action='typing')
