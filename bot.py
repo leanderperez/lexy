@@ -1,6 +1,7 @@
 import os
 import sqlite3
 import asyncio
+from dotenv import load_dotenv
 from telegram import Update
 from telegram.ext import Application, MessageHandler, CommandHandler, filters, ContextTypes
 import google.generativeai as genai
@@ -8,8 +9,8 @@ import edge_tts
 
 # --- CONFIGURACIÓN DE APIS ---
 # Reemplaza con tus claves reales
-GEMINI_API_KEY = "TU_API_KEY_DE_GEMINI"
-TELEGRAM_TOKEN = "TU_TELEGRAM_BOT_TOKEN"
+GEMINI_API_KEY = os.getenv("GEMINI")
+TELEGRAM_TOKEN = os.getenv("LEXY")
 
 genai.configure(api_key=GEMINI_API_KEY)
 model = genai.GenerativeModel('gemini-1.5-flash')
