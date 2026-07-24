@@ -2,9 +2,10 @@ import os
 import sqlite3
 import asyncio
 import re
+import html
 from datetime import datetime, time
 from dotenv import load_dotenv
-from telegram import Update
+from telegram import Update, BotCommand
 from telegram.ext import Application, MessageHandler, CommandHandler, filters, ContextTypes
 from google import genai
 from google.genai import types
@@ -123,9 +124,12 @@ Evalúa si la gramática es correcta y si suena natural para un nativo.
 Si hay errores, corrígelos, muéstrame el Pinyin y explícame la regla gramatical en español de forma simple."""
 
 PROMPT_DIALOGO_BASE = """Eres Lexy mi compañera de intercambio de idiomas nativa de China. 
-Estamos practicando conversación de nivel HSK 1 3.0. Responde de forma concisa y natural a lo que escuches o leas.
-REGLA IMPORTANTE: Intenta incluir de forma natural las siguientes palabras en tu respuesta para que el estudiante las practique: {palabras_objetivo}.
-Incluye siempre los caracteres y el pinyin en tu texto."""
+Estamos practicando conversación de nivel HSK 1 3.0.
+REGLA DE FORMATO ESTRICTA: Tu respuesta debe tener SIEMPRE esta estructura exacta, separada por saltos de línea:
+<tts>Respuesta en caracteres chinos</tts>
+Respuesta en Pinyin
+Traducción al español
+REGLA IMPORTANTE: Intenta incluir estas palabras: {palabras_objetivo}."""
 
 # --- COMANDOS ---
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -178,8 +182,7 @@ async def escribir_proactivamente(context: ContextTypes.DEFAULT_TYPE):
     for (chat_id,) in usuarios:
         try:
             historial = recuperar_historial(chat_id, limite=5)
-            prompt_proactivo = "Eres Lexy. El usuario no te ha hablado en un buen rato. Escríbele un mensaje corto, amigable y cotidiano en chino mandarín (con pinyin en formato <tg-spoiler>pinyin</tg-spoiler>) para sacarle conversación. NO uses español."
-            
+            prompt_proactivo = "Eres Lexy. El usuario no te ha hablado en un buen rato. Escríbele un mensaje corto para sacarle conversación. REGLA ESTRICTA DE FORMATO: Responde exactamente con 3 líneas: la primera con caracteres chinos envueltos en <tts></tts>, la segunda con el pinyin, y la tercera con español."            
             sesion_temporal = client.chats.create(model='gemini-3.5-flash-lite', history=historial)
             respuesta = sesion_temporal.send_message(prompt_proactivo)
             
@@ -195,16 +198,14 @@ async def process_interaction(update: Update, context: ContextTypes.DEFAULT_TYPE
     current_mode = user_states.get(user_id, 'dialogo')
     
     if current_mode != 'dialogo' and user_id not in user_sessions:
-        # Modo por defecto si reinició el bot
-        user_sessions[user_id] = client.chats.create(model='gemini-3.5-flash-lite')
+        user_sessions[user_id] = client.chats.create(model='gemini-2.5-flash')
         
     chat_session = user_sessions.get(user_id)
     if current_mode == 'dialogo':
-        # En diálogo siempre refrescamos con memoria
         palabras_a_practicar = ", ".join(obtener_palabras_recientes(5))
         prompt_dinamico = PROMPT_DIALOGO_BASE.format(palabras_objetivo=palabras_a_practicar)
         historial = recuperar_historial(chat_id)
-        chat_session = client.chats.create(model='gemini-3.5-flash-lite', history=historial, config={'system_instruction': prompt_dinamico})
+        chat_session = client.chats.create(model='gemini-2.5-flash', history=historial, config={'system_instruction': prompt_dinamico})
         user_sessions[user_id] = chat_session
 
     await context.bot.send_chat_action(chat_id=chat_id, action='typing')
@@ -213,41 +214,44 @@ async def process_interaction(update: Update, context: ContextTypes.DEFAULT_TYPE
         registrar_interaccion(chat_id, "user", texto_original if not is_audio else "[Mensaje de Voz]")
         
         instruccion = input_data
-        
-        # Lógica estricta si es audio (Pinyin oculto y 0 español)
         if is_audio:
-            regla_audio = "\n\nREGLA ESTRICTA: El usuario te envió un audio. Responde con caracteres chinos. Puedes incluir pinyin y traducción al español, pero debes ocultar AMBOS obligatoriamente usando formato HTML así: <tg-spoiler>Pinyin y español aquí</tg-spoiler>."
-            instruccion = [input_data, regla_audio]
+            # Si es audio, solo le recordamos a Lexy que mantenga su estructura estricta
+            instruccion = [input_data, "El usuario te envió un mensaje de voz. Responde siguiendo tus reglas estrictas de formato: <tts>, pinyin y español separados por saltos de línea."]
         
         respuesta = chat_session.send_message(instruccion)
         texto_salida = respuesta.text
         
         registrar_interaccion(chat_id, "model", texto_salida)
 
-        if is_audio:
-            await context.bot.send_chat_action(chat_id=chat_id, action='record_voice')
-            output_audio_path = f"response_{user_id}.mp3"
-            
-            # Limpiar el texto para que el TTS no lea etiquetas HTML o Markdown
-            await context.bot.send_chat_action(chat_id=chat_id, action='record_voice')
-            output_audio_path = f"response_{user_id}.mp3"
-            
-            # NUEVA LÍNEA: Elimina completamente la etiqueta <tg-spoiler> y todo lo que esté adentro
-            texto_limpio = re.sub(r'<tg-spoiler>.*?</tg-spoiler>', '', texto_salida, flags=re.DOTALL)
-            
-            # Limpiamos asteriscos o espacios sobrantes para que el TTS no se confunda
-            texto_limpio = texto_limpio.replace('*', '').strip()
-            
-            # Un -25% de velocidad equivale a 0.75x
-            tts = edge_tts.Communicate(texto_limpio, voice="zh-CN-XiaoxiaoNeural", rate="-25%")
-            await tts.save(output_audio_path)
-            
-            with open(output_audio_path, "rb") as audio:
-                # Usamos HTML parse mode para que Telegram renderice el spoiler correctamente
-                await context.bot.send_voice(chat_id=chat_id, voice=audio, caption=texto_salida[:1000], parse_mode='HTML')
-            os.remove(output_audio_path)
-        else:
-            await update.message.reply_text(texto_salida, parse_mode='HTML')
+        # --- 1. SIEMPRE GENERAR AUDIO SOLO CON LOS CARACTERES ---
+        await context.bot.send_chat_action(chat_id=chat_id, action='record_voice')
+        output_audio_path = f"response_{user_id}.mp3"
+        
+        # Extraemos todo lo que Lexy puso dentro de las etiquetas <tts>
+        matches = re.findall(r'<tts>(.*?)</tts>', texto_salida, re.DOTALL)
+        texto_para_audio = " ".join(matches).replace('*', '').strip() if matches else texto_salida.replace('*', '')
+        
+        # Audio al 0.75x (-25%)
+        tts = edge_tts.Communicate(texto_para_audio, voice="zh-CN-XiaoxiaoNeural", rate="-25%")
+        await tts.save(output_audio_path)
+        
+        # Enviamos la nota de voz sola
+        with open(output_audio_path, "rb") as audio:
+            await context.bot.send_voice(chat_id=chat_id, voice=audio)
+        os.remove(output_audio_path)
+
+        # --- 2. PREPARAR Y ENVIAR TEXTO TOTALMENTE OCULTO ---
+        # Quitamos las etiquetas <tts> para que no se vean en Telegram
+        texto_telegram = texto_salida.replace('<tts>', '').replace('</tts>', '').strip()
+        
+        # Escapamos caracteres especiales (<, >) para evitar errores de parseo en Telegram
+        texto_seguro = html.escape(texto_telegram)
+        
+        # Envolvemos el 100% del mensaje en el spoiler de Telegram
+        texto_oculto = f"<tg-spoiler>{texto_seguro}</tg-spoiler>"
+        
+        # Enviamos el texto bloqueado justo debajo del audio
+        await context.bot.send_message(chat_id=chat_id, text=texto_oculto, parse_mode='HTML')
             
     except Exception as e:
         await update.message.reply_text(f"Hubo un error procesando la solicitud: {str(e)}")
@@ -289,10 +293,18 @@ async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
     client.files.delete(name=audio_part.name)
     os.remove(input_audio_path)
 
+async def configurar_menu(application: Application):
+    await application.bot.set_my_commands([
+        BotCommand("profesora", "📚 Modo Enseñanza (Retos y vocabulario)"),
+        BotCommand("evaluar", "📝 Modo Evaluación (Corregir oraciones)"),
+        BotCommand("amiga", "🗣️ Modo Conversación (Diálogo libre)"),
+        BotCommand("start", "🔄 Ver mensaje de bienvenida")
+    ])
+
 def main():
     init_db()
-    app = Application.builder().token(TELEGRAM_TOKEN).build()
-    
+    app = Application.builder().token(TELEGRAM_TOKEN).post_init(configurar_menu).build()  
+      
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("profesora", set_modo_ensenanza))
     app.add_handler(CommandHandler("evaluar", set_modo_evaluacion))
