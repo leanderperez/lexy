@@ -83,12 +83,12 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def set_modo_ensenanza(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_states[update.effective_user.id] = 'ensenanza'
     # Reiniciamos la sesión de chat para cambiar el contexto
-    user_sessions[update.effective_user.id] = model.start_chat(history=[])
+    user_sessions[update.effective_user.id] = client.chats.create(model='gemini-1.5-flash')
     await update.message.reply_text("📚 Modo Enseñanza activado. Envíame una palabra u oración y te daré ejemplos de uso.")
 
 async def set_modo_dialogo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_states[update.effective_user.id] = 'dialogo'
-    user_sessions[update.effective_user.id] = model.start_chat(history=[])
+    user_sessions[update.effective_user.id] = client.chats.create(model='gemini-1.5-flash')
     await update.message.reply_text("🗣️ Modo Diálogo activado. ¡Hablemos! Envíame audios o texto.")
 
 async def exportar_vocabulario(update: Update, context: ContextTypes.DEFAULT_TYPE):
