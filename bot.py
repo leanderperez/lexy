@@ -173,7 +173,10 @@ async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await voice_file.download_to_drive(input_audio_path)
     
     # Subir a Gemini
-    audio_part = client.files.upload(file=input_audio_path)
+    audio_part = client.files.upload(
+        file=input_audio_path,
+        config={'mime_type': 'audio/ogg'}
+    )
     
     await process_interaction(update, context, audio_part, is_audio=True)
     
