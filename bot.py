@@ -136,13 +136,13 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def set_modo_ensenanza(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
     user_states[update.effective_user.id] = 'ensenanza'
-    user_sessions[update.effective_user.id] = client.chats.create(model='gemini-3.5-flash', config={'system_instruction': PROMPT_ENSENANZA})
+    user_sessions[update.effective_user.id] = client.chats.create(model='gemini-2.5-flash', config={'system_instruction': PROMPT_ENSENANZA})
     await update.message.reply_text("📚 Modo Enseñanza activado.")
 
 async def set_modo_evaluacion(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
     user_states[update.effective_user.id] = 'evaluacion'
-    user_sessions[update.effective_user.id] = client.chats.create(model='gemini-3.5-flash', config={'system_instruction': PROMPT_EVALUACION})
+    user_sessions[update.effective_user.id] = client.chats.create(model='gemini-2.5-flash', config={'system_instruction': PROMPT_EVALUACION})
     await update.message.reply_text("📝 Modo Evaluación activado.")
 
 async def set_modo_dialogo(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -155,7 +155,7 @@ async def set_modo_dialogo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # Al iniciar el diálogo, recuperamos la memoria
     historial = recuperar_historial(chat_id)
     user_sessions[update.effective_user.id] = client.chats.create(
-        model='gemini-3.5-flash', 
+        model='gemini-2.5-flash', 
         history=historial,
         config={'system_instruction': prompt_dinamico}
     )
@@ -174,7 +174,7 @@ async def escribir_proactivamente(context: ContextTypes.DEFAULT_TYPE):
             historial = recuperar_historial(chat_id, limite=5)
             prompt_proactivo = "Eres Lexy. El usuario no te ha hablado en un buen rato. Escríbele un mensaje corto, amigable y cotidiano en chino mandarín (con pinyin en formato <tg-spoiler>pinyin</tg-spoiler>) para sacarle conversación. NO uses español."
             
-            sesion_temporal = client.chats.create(model='gemini-3.5-flash', history=historial)
+            sesion_temporal = client.chats.create(model='gemini-2.5-flash', history=historial)
             respuesta = sesion_temporal.send_message(prompt_proactivo)
             
             registrar_interaccion(chat_id, "model", respuesta.text)
@@ -190,7 +190,7 @@ async def process_interaction(update: Update, context: ContextTypes.DEFAULT_TYPE
     
     if current_mode != 'dialogo' and user_id not in user_sessions:
         # Modo por defecto si reinició el bot
-        user_sessions[user_id] = client.chats.create(model='gemini-3.5-flash')
+        user_sessions[user_id] = client.chats.create(model='gemini-2.5-flash')
         
     chat_session = user_sessions.get(user_id)
     if current_mode == 'dialogo':
@@ -198,7 +198,7 @@ async def process_interaction(update: Update, context: ContextTypes.DEFAULT_TYPE
         palabras_a_practicar = ", ".join(obtener_palabras_recientes(5))
         prompt_dinamico = PROMPT_DIALOGO_BASE.format(palabras_objetivo=palabras_a_practicar)
         historial = recuperar_historial(chat_id)
-        chat_session = client.chats.create(model='gemini-3.5-flash', history=historial, config={'system_instruction': prompt_dinamico})
+        chat_session = client.chats.create(model='gemini-2.5-flash', history=historial, config={'system_instruction': prompt_dinamico})
         user_sessions[user_id] = chat_session
 
     await context.bot.send_chat_action(chat_id=chat_id, action='typing')
