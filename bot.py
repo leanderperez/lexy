@@ -182,14 +182,37 @@ async def escribir_proactivamente(context: ContextTypes.DEFAULT_TYPE):
     for (chat_id,) in usuarios:
         try:
             historial = recuperar_historial(chat_id, limite=5)
-            prompt_proactivo = "Eres Lexy. El usuario no te ha hablado en un buen rato. Escríbele un mensaje corto para sacarle conversación. REGLA ESTRICTA DE FORMATO: Responde exactamente con 3 líneas: la primera con caracteres chinos envueltos en <tts></tts>, la segunda con el pinyin, y la tercera con español."            
-            sesion_temporal = client.chats.create(model='gemini-3.5-flash-lite', history=historial)
-            respuesta = sesion_temporal.send_message(prompt_proactivo)
+            prompt_proactivo = "Eres Lexy. El usuario no te ha hablado en un buen rato. Escríbele un mensaje corto para sacarle conversación. REGLA ESTRICTA DE FORMATO: Responde exactamente con 3 líneas: la primera con caracteres chinos envueltos en <tts></tts>, la segunda con el pinyin, y la tercera con español."
             
-            registrar_interaccion(chat_id, "model", respuesta.text)
-            await context.bot.send_message(chat_id=chat_id, text=respuesta.text, parse_mode='HTML')
+            sesion_temporal = client.chats.create(model='gemini-2.5-flash', history=historial)
+            respuesta = sesion_temporal.send_message(prompt_proactivo)
+            texto_salida = respuesta.text
+            
+            registrar_interaccion(chat_id, "model", texto_salida)
+
+            # --- 1. GENERAR EL AUDIO PROACTIVO ---
+            output_audio_path = f"proactive_{chat_id}.mp3"
+            
+            matches = re.findall(r'<tts>(.*?)</tts>', texto_salida, re.DOTALL)
+            texto_para_audio = " ".join(matches).replace('*', '').strip() if matches else texto_salida.replace('*', '')
+            
+            tts = edge_tts.Communicate(texto_para_audio, voice="zh-CN-XiaoxiaoNeural", rate="-25%")
+            await tts.save(output_audio_path)
+            
+            with open(output_audio_path, "rb") as audio:
+                await context.bot.send_voice(chat_id=chat_id, voice=audio)
+            os.remove(output_audio_path)
+
+            # --- 2. LIMPIAR Y OCULTAR EL TEXTO ---
+            texto_telegram = texto_salida.replace('<tts>', '').replace('</tts>', '').strip()
+            texto_seguro = html.escape(texto_telegram)
+            texto_oculto = f"<tg-spoiler>{texto_seguro}</tg-spoiler>"
+            
+            await context.bot.send_message(chat_id=chat_id, text=texto_oculto, parse_mode='HTML')
+            
         except Exception as e:
             print(f"Error enviando mensaje proactivo a {chat_id}: {e}")
+
 
 # --- PROCESAMIENTO DE MENSAJES Y AUDIO ---
 async def process_interaction(update: Update, context: ContextTypes.DEFAULT_TYPE, input_data, is_audio=False, texto_original=""):
