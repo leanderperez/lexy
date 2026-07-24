@@ -24,10 +24,6 @@ if not TELEGRAM_TOKEN:
 
 client = genai.Client(api_key=GEMINI_API_KEY)
 
-print("Modelos disponibles para tu cuenta:")
-for modelo in client.models.list():
-    print(f"- {modelo.name}")
-
 # --- CONFIGURACIÓN DE BASE DE DATOS ---
 DB_FILE = 'vocabulario.db'
 
@@ -109,18 +105,21 @@ def recuperar_historial(chat_id, limite=10):
 user_states = {}
 user_sessions = {}
 
-PROMPT_ENSENANZA="""Eres Lexy mi tutora nativa de chino mandarín y compañera de estudio. Mi objetivo es aprender caracteres de forma práctica y natural, enfocada en la comunicación cotidiana (estilo mensajes de WeChat). 
-Seguiremos un método estructurado basado en los siguientes puntos para cada palabra nueva que yo te envíe:
+PROMPT_ENSENANZA="""Eres Lexy mi tutora nativa de chino mandarín y compañera de estudio. Mi objetivo es aprender caracteres de forma práctica y natural. 
+REGLA VITAL: NO inicies la lección ni sugieras palabras por tu cuenta. ESPERA siempre a que yo te envíe la palabra o el carácter que quiero estudiar.
+Una vez que yo te envíe la palabra, seguiremos este método estructurado:
 1. Análisis del Carácter: Explica brevemente el significado del carácter, su componente visual o radical, y su lógica básica.
 2. Regla de Tres (Usos Clave): Muestra entre 2 y 3 palabras compuestas o estructuras hipercomunes en las que este carácter sea protagonista en la vida diaria. Incluye caracteres, Pinyin y traducción.
 3. El Reto de Chat (Práctica Activa): Plantéame un escenario cotidiano real y pídeme que redacte una frase corta usando la palabra nueva combinada con lo que ya sé. Dame pistas claras para guiar mi respuesta.
 4. Feedback Inmediato y Natural: Cuando yo responda al reto, valida mi frase. Si cometo un error sutil de gramática o naturalidad, corrígelo de forma directa y amable, explicando el porqué, y muestra cómo lo diría un nativo.
-5. El Contador del Bloque: Mantén un registro visual al final de cada respuesta. Vamos a agrupar las palabras de 5 en 5. Cuando completemos un bloque de 5 palabras, detén el avance y hazme un examen/repaso general usando todas las palabras de ese bloque en un diálogo integrado."""
+5. El Contador del Bloque: Mantén un registro visual al final de cada respuesta. Vamos a agrupar las palabras de 5 en 5. Cuando completemos un bloque de 5 palabras, detén el avance y hazme un examen/repaso general usando todas las palabras de ese bloque en un diálogo integrado.
+"""
 
 PROMPT_EVALUACION = """Eres Lexy, actua como mi profesora de chino mandarín nativo. 
 Voy a escribir oraciones creadas por mí. No las traduzcas directamente. 
 Evalúa si la gramática es correcta y si suena natural para un nativo. 
-Si hay errores, corrígelos, muéstrame el Pinyin y explícame la regla gramatical en español de forma simple."""
+Si hay errores, corrígelos, muéstrame el Pinyin y explícame la regla gramatical en español de forma simple.
+"""
 
 PROMPT_DIALOGO_BASE = """Eres Lexy mi compañera de intercambio de idiomas nativa de China. 
 Hablar contigo me sirve para aprender bocabulario del nivel HSK1 3.0 y practcar.
@@ -146,7 +145,7 @@ async def set_modo_ensenanza(update: Update, context: ContextTypes.DEFAULT_TYPE)
     chat_id = update.effective_chat.id
     user_states[update.effective_user.id] = 'ensenanza'
     user_sessions[update.effective_user.id] = client.chats.create(model='gemini-3.5-flash-lite', config={'system_instruction': PROMPT_ENSENANZA})
-    await update.message.reply_text("📚 Modo Enseñanza activado.")
+    await update.message.reply_text("📚 Modo Enseñanza activado. Esperando tus palabras...")
 
 async def set_modo_evaluacion(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
@@ -236,7 +235,6 @@ async def process_interaction(update: Update, context: ContextTypes.DEFAULT_TYPE
         
         instruccion = input_data
         if is_audio:
-            # Si es audio, solo le recordamos a Lexy que mantenga su estructura estricta
             instruccion = [input_data, "El usuario te envió un mensaje de voz. Responde siguiendo tus reglas estrictas de formato: <tts>, pinyin y español separados por saltos de línea."]
         
         respuesta = chat_session.send_message(instruccion)
@@ -244,35 +242,33 @@ async def process_interaction(update: Update, context: ContextTypes.DEFAULT_TYPE
         
         registrar_interaccion(chat_id, "model", texto_salida)
 
-        # --- 1. SIEMPRE GENERAR AUDIO SOLO CON LOS CARACTERES ---
-        await context.bot.send_chat_action(chat_id=chat_id, action='record_voice')
-        output_audio_path = f"response_{user_id}.mp3"
-        
-        # Extraemos todo lo que Lexy puso dentro de las etiquetas <tts>
-        matches = re.findall(r'<tts>(.*?)</tts>', texto_salida, re.DOTALL)
-        texto_para_audio = " ".join(matches).replace('*', '').strip() if matches else texto_salida.replace('*', '')
-        
-        # Audio al 0.75x (-25%)
-        tts = edge_tts.Communicate(texto_para_audio, voice="zh-CN-XiaoxiaoNeural", rate="-25%")
-        await tts.save(output_audio_path)
-        
-        # Enviamos la nota de voz sola
-        with open(output_audio_path, "rb") as audio:
-            await context.bot.send_voice(chat_id=chat_id, voice=audio)
-        os.remove(output_audio_path)
-
-        # --- 2. PREPARAR Y ENVIAR TEXTO TOTALMENTE OCULTO ---
-        # Quitamos las etiquetas <tts> para que no se vean en Telegram
+        # --- LIMPIEZA DE TEXTO (Para todos los modos) ---
         texto_telegram = texto_salida.replace('<tts>', '').replace('</tts>', '').strip()
-        
-        # Escapamos caracteres especiales (<, >) para evitar errores de parseo en Telegram
         texto_seguro = html.escape(texto_telegram)
-        
-        # Envolvemos el 100% del mensaje en el spoiler de Telegram
-        texto_oculto = f"<tg-spoiler>{texto_seguro}</tg-spoiler>"
-        
-        # Enviamos el texto bloqueado justo debajo del audio
-        await context.bot.send_message(chat_id=chat_id, text=texto_oculto, parse_mode='HTML')
+
+        if current_mode == 'dialogo':
+            # --- SOLO EN MODO DIÁLOGO: GENERAR AUDIO Y OCULTAR TEXTO ---
+            await context.bot.send_chat_action(chat_id=chat_id, action='record_voice')
+            output_audio_path = f"response_{user_id}.mp3"
+            
+            matches = re.findall(r'<tts>(.*?)</tts>', texto_salida, re.DOTALL)
+            texto_para_audio = " ".join(matches).replace('*', '').strip() if matches else texto_salida.replace('*', '')
+            
+            tts = edge_tts.Communicate(texto_para_audio, voice="zh-CN-XiaoxiaoNeural", rate="-25%")
+            await tts.save(output_audio_path)
+            
+            with open(output_audio_path, "rb") as audio:
+                await context.bot.send_voice(chat_id=chat_id, voice=audio)
+            os.remove(output_audio_path)
+
+            texto_final = f"<tg-spoiler>{texto_seguro}</tg-spoiler>"
+            await context.bot.send_message(chat_id=chat_id, text=texto_final, parse_mode='HTML')
+            
+        else:
+            # --- MODO ENSEÑANZA Y EVALUACIÓN ---
+            # No enviamos audio, y el texto va directo sin ocultar
+            texto_final = texto_seguro
+            await context.bot.send_message(chat_id=chat_id, text=texto_final, parse_mode='HTML')
             
     except Exception as e:
         await update.message.reply_text(f"Hubo un error procesando la solicitud: {str(e)}")
