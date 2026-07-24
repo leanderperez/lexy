@@ -7,11 +7,20 @@ from telegram.ext import Application, MessageHandler, CommandHandler, filters, C
 from google import genai
 import edge_tts
 
-# --- CONFIGURACIÓN DE APIS ---
-# Reemplaza con tus claves reales
-GEMINI_API_KEY = os.getenv("GEMINI")
-TELEGRAM_TOKEN = os.getenv("LEXY")
+# 1. Cargar el archivo .env PRIMERO
+load_dotenv()
 
+# 2. Recuperar las variables
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
+
+# 3. Validar que las variables existen (esto evitará el error confuso de la librería)
+if not GEMINI_API_KEY:
+    raise ValueError("ERROR: No se encontró GEMINI_API_KEY. Revisa tu archivo .env")
+if not TELEGRAM_TOKEN:
+    raise ValueError("ERROR: No se encontró TELEGRAM_TOKEN. Revisa tu archivo .env")
+
+# 4. Inicializar el cliente con la nueva sintaxis de google-genai
 client = genai.Client(api_key=GEMINI_API_KEY)
 
 # --- CONFIGURACIÓN DE BASE DE DATOS ---
