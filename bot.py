@@ -1,34 +1,26 @@
 import os
 import sqlite3
 import asyncio
+from datetime import datetime, time
 from dotenv import load_dotenv
 from telegram import Update
 from telegram.ext import Application, MessageHandler, CommandHandler, filters, ContextTypes
 from google import genai
+from google.genai import types
 import edge_tts
 
 # 1. Cargar el archivo .env PRIMERO
 load_dotenv()
 
-# 2. Recuperar las variables
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 
-# 3. Validar que las variables existen (esto evitará el error confuso de la librería)
 if not GEMINI_API_KEY:
     raise ValueError("ERROR: No se encontró GEMINI_API_KEY. Revisa tu archivo .env")
 if not TELEGRAM_TOKEN:
     raise ValueError("ERROR: No se encontró TELEGRAM_TOKEN. Revisa tu archivo .env")
 
-
-
-
-# 4. Inicializar el cliente con la nueva sintaxis de google-genai
 client = genai.Client(api_key=GEMINI_API_KEY)
-
-print("Modelos disponibles para tu cuenta:")
-for modelo in client.models.list():
-    print(f"- {modelo.name}")
 
 # --- CONFIGURACIÓN DE BASE DE DATOS ---
 DB_FILE = 'vocabulario.db'
@@ -36,10 +28,28 @@ DB_FILE = 'vocabulario.db'
 def init_db():
     conn = sqlite3.connect(DB_FILE)
     cursor = conn.cursor()
+    # Tabla de vocabulario
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS palabras (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             palabra TEXT UNIQUE,
+            fecha TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    ''')
+    # Tabla para guardar a los usuarios (necesario para mensajes proactivos)
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS usuarios (
+            chat_id INTEGER PRIMARY KEY,
+            ultimo_contacto TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    ''')
+    # Tabla de historial para la memoria de Lexy
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS historial (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            chat_id INTEGER,
+            rol TEXT,
+            contenido TEXT,
             fecha TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
     ''')
@@ -53,10 +63,20 @@ def guardar_palabra(palabra):
         cursor.execute("INSERT INTO palabras (palabra) VALUES (?)", (palabra,))
         conn.commit()
     except sqlite3.IntegrityError:
-        pass # La palabra ya existe
+        pass 
     conn.close()
 
-def obtener_palabras_recientes(limite=3):
+def registrar_interaccion(chat_id, rol, contenido):
+    conn = sqlite3.connect(DB_FILE)
+    cursor = conn.cursor()
+    # Actualizar la fecha del usuario
+    cursor.execute("INSERT OR REPLACE INTO usuarios (chat_id, ultimo_contacto) VALUES (?, CURRENT_TIMESTAMP)", (chat_id,))
+    # Guardar en el historial
+    cursor.execute("INSERT INTO historial (chat_id, rol, contenido) VALUES (?, ?, ?)", (chat_id, rol, contenido))
+    conn.commit()
+    conn.close()
+
+def obtener_palabras_recientes(limite=5):
     conn = sqlite3.connect(DB_FILE)
     cursor = conn.cursor()
     cursor.execute("SELECT palabra FROM palabras ORDER BY fecha DESC LIMIT ?", (limite,))
@@ -64,122 +84,188 @@ def obtener_palabras_recientes(limite=3):
     conn.close()
     return palabras
 
+def recuperar_historial(chat_id, limite=10):
+    conn = sqlite3.connect(DB_FILE)
+    cursor = conn.cursor()
+    cursor.execute("SELECT rol, contenido FROM historial WHERE chat_id = ? ORDER BY fecha DESC LIMIT ?", (chat_id, limite))
+    filas = cursor.fetchall()
+    conn.close()
+    
+    historial_gemini = []
+    # Invertimos para que el orden cronológico sea correcto para Gemini
+    for rol, contenido in reversed(filas):
+        historial_gemini.append(
+            types.Content(role=rol, parts=[types.Part.from_text(text=contenido)])
+        )
+    return historial_gemini
+
 # --- GESTIÓN DE ESTADOS Y SESIONES ---
 user_states = {}
-user_sessions = {} # Para mantener el historial de la conversación
+user_sessions = {}
 
-PROMPT_ENSENANZA = """Eres un profesor de mandarín. Tu estudiante tiene nivel HSK 1 3.0. 
-Se te dará una palabra u oración. Explica su significado, da el pinyin y proporciona 3 ejemplos claros de uso. 
-Estructura tu respuesta de forma limpia y fácil de leer."""
+PROMPT_ENSENANZA="""Eres Lexy mi tutora nativa de chino mandarín y compañera de estudio. Mi objetivo es aprender caracteres de forma práctica y natural, enfocada en la comunicación cotidiana (estilo mensajes de WeChat). 
+Seguiremos un método estructurado basado en los siguientes puntos para cada palabra nueva que yo te envíe:
+1. Análisis del Carácter: Explica brevemente el significado del carácter, su componente visual o radical, y su lógica básica.
+2. Regla de Tres (Usos Clave): Muestra entre 2 y 3 palabras compuestas o estructuras hipercomunes en las que este carácter sea protagonista en la vida diaria. Incluye caracteres, Pinyin y traducción.
+3. El Reto de Chat (Práctica Activa): Plantéame un escenario cotidiano real y pídeme que redacte una frase corta usando la palabra nueva combinada con lo que ya sé. Dame pistas claras para guiar mi respuesta.
+4. Feedback Inmediato y Natural: Cuando yo responda al reto, valida mi frase. Si cometo un error sutil de gramática o naturalidad, corrígelo de forma directa y amable, explicando el porqué, y muestra cómo lo diría un nativo.
+5. El Contador del Bloque: Mantén un registro visual al final de cada respuesta. Vamos a agrupar las palabras de 5 en 5. Cuando completemos un bloque de 5 palabras, detén el avance y hazme un examen/repaso general usando todas las palabras de ese bloque en un diálogo integrado."""
 
-PROMPT_DIALOGO_BASE = """Eres un compañero de intercambio de idiomas nativo de China. 
+PROMPT_EVALUACION = """Eres Lexy, actua como mi profesora de chino mandarín nativo. 
+Voy a escribir oraciones creadas por mí. No las traduzcas directamente. 
+Evalúa si la gramática es correcta y si suena natural para un nativo. 
+Si hay errores, corrígelos, muéstrame el Pinyin y explícame la regla gramatical en español de forma simple."""
+
+PROMPT_DIALOGO_BASE = """Eres Lexy mi compañera de intercambio de idiomas nativa de China. 
 Estamos practicando conversación de nivel HSK 1 3.0. Responde de forma concisa y natural a lo que escuches o leas.
 REGLA IMPORTANTE: Intenta incluir de forma natural las siguientes palabras en tu respuesta para que el estudiante las practique: {palabras_objetivo}.
 Incluye siempre los caracteres y el pinyin en tu texto."""
 
 # --- COMANDOS ---
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    chat_id = update.effective_chat.id
+    registrar_interaccion(chat_id, "user", "/start")
     mensaje = (
-        "¡Hola! Soy tu asistente de mandarín.\n\n"
-        "Usa /ensenar para cambiar al modo de explicación de vocabulario.\n"
-        "Usa /dialogar para practicar conversación libre.\n"
-        "Usa /exportar para obtener tu vocabulario en CSV."
+        "你好我是 Lexy\n\n"
+        "Usa /profesora para modo enseñanza\n"
+        "Usa /evaluar para evaluar oraciones\n"
+        "Usa /amiga para modo conversación libre\n"
     )
     await update.message.reply_text(mensaje)
 
 async def set_modo_ensenanza(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    chat_id = update.effective_chat.id
     user_states[update.effective_user.id] = 'ensenanza'
-    # Reiniciamos la sesión de chat para cambiar el contexto
-    user_sessions[update.effective_user.id] = client.chats.create(model='gemini-3.5-flash')
-    await update.message.reply_text("📚 Modo Enseñanza activado. Envíame una palabra u oración y te daré ejemplos de uso.")
+    user_sessions[update.effective_user.id] = client.chats.create(model='gemini-3.5-flash', config={'system_instruction': PROMPT_ENSENANZA})
+    await update.message.reply_text("📚 Modo Enseñanza activado.")
+
+async def set_modo_evaluacion(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    chat_id = update.effective_chat.id
+    user_states[update.effective_user.id] = 'evaluacion'
+    user_sessions[update.effective_user.id] = client.chats.create(model='gemini-3.5-flash', config={'system_instruction': PROMPT_EVALUACION})
+    await update.message.reply_text("📝 Modo Evaluación activado.")
 
 async def set_modo_dialogo(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    chat_id = update.effective_chat.id
     user_states[update.effective_user.id] = 'dialogo'
-    user_sessions[update.effective_user.id] = client.chats.create(model='gemini-3.5-flash')
-    await update.message.reply_text("🗣️ Modo Diálogo activado. ¡Hablemos! Envíame audios o texto.")
+    
+    palabras_a_practicar = ", ".join(obtener_palabras_recientes(5))
+    prompt_dinamico = PROMPT_DIALOGO_BASE.format(palabras_objetivo=palabras_a_practicar)
+    
+    # Al iniciar el diálogo, recuperamos la memoria
+    historial = recuperar_historial(chat_id)
+    user_sessions[update.effective_user.id] = client.chats.create(
+        model='gemini-3.5-flash', 
+        history=historial,
+        config={'system_instruction': prompt_dinamico}
+    )
+    await update.message.reply_text("🗣️ Modo Diálogo activado. ¡Hablemos!")
 
-async def exportar_vocabulario(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    import csv
+# --- TAREAS PROACTIVAS (2 VECES AL DÍA) ---
+async def escribir_proactivamente(context: ContextTypes.DEFAULT_TYPE):
     conn = sqlite3.connect(DB_FILE)
     cursor = conn.cursor()
-    cursor.execute("SELECT palabra, fecha FROM palabras ORDER BY fecha DESC")
-    filas = cursor.fetchall()
+    cursor.execute("SELECT chat_id FROM usuarios")
+    usuarios = cursor.fetchall()
     conn.close()
-    
-    if not filas:
-        await update.message.reply_text("Tu base de datos está vacía.")
-        return
-        
-    csv_filename = "vocabulario_exportado.csv"
-    with open(csv_filename, 'w', newline='', encoding='utf-8') as f:
-        writer = csv.writer(f)
-        writer.writerow(["Palabra/Oracion", "Fecha Agregada"])
-        writer.writerows(filas)
-        
-    with open(csv_filename, 'rb') as doc:
-        await context.bot.send_document(chat_id=update.effective_chat.id, document=doc, filename="anki_import.csv")
-    os.remove(csv_filename)
+
+    for (chat_id,) in usuarios:
+        try:
+            historial = recuperar_historial(chat_id, limite=5)
+            prompt_proactivo = "Eres Lexy. El usuario no te ha hablado en un buen rato. Escríbele un mensaje corto, amigable y cotidiano en chino mandarín (con pinyin en formato <tg-spoiler>pinyin</tg-spoiler>) para sacarle conversación. NO uses español."
+            
+            sesion_temporal = client.chats.create(model='gemini-3.5-flash', history=historial)
+            respuesta = sesion_temporal.send_message(prompt_proactivo)
+            
+            registrar_interaccion(chat_id, "model", respuesta.text)
+            await context.bot.send_message(chat_id=chat_id, text=respuesta.text, parse_mode='HTML')
+        except Exception as e:
+            print(f"Error enviando mensaje proactivo a {chat_id}: {e}")
 
 # --- PROCESAMIENTO DE MENSAJES Y AUDIO ---
-async def process_interaction(update: Update, context: ContextTypes.DEFAULT_TYPE, input_data, is_audio=False):
+async def process_interaction(update: Update, context: ContextTypes.DEFAULT_TYPE, input_data, is_audio=False, texto_original=""):
     user_id = update.effective_user.id
+    chat_id = update.effective_chat.id
     current_mode = user_states.get(user_id, 'dialogo')
     
-    if user_id not in user_sessions:
+    if current_mode != 'dialogo' and user_id not in user_sessions:
+        # Modo por defecto si reinició el bot
         user_sessions[user_id] = client.chats.create(model='gemini-3.5-flash')
-    
-    chat_session = user_sessions[user_id]
-    
-    await context.bot.send_chat_action(chat_id=update.effective_chat.id, action='typing')
+        
+    chat_session = user_sessions.get(user_id)
+    if current_mode == 'dialogo':
+        # En diálogo siempre refrescamos con memoria
+        palabras_a_practicar = ", ".join(obtener_palabras_recientes(5))
+        prompt_dinamico = PROMPT_DIALOGO_BASE.format(palabras_objetivo=palabras_a_practicar)
+        historial = recuperar_historial(chat_id)
+        chat_session = client.chats.create(model='gemini-3.5-flash', history=historial, config={'system_instruction': prompt_dinamico})
+        user_sessions[user_id] = chat_session
+
+    await context.bot.send_chat_action(chat_id=chat_id, action='typing')
 
     try:
-        if current_mode == 'ensenanza':
-            if not is_audio:
-                guardar_palabra(input_data)
-            instruccion = [PROMPT_ENSENANZA, input_data]
-            
-        elif current_mode == 'dialogo':
-            palabras_a_practicar = ", ".join(obtener_palabras_recientes(3))
-            prompt_dinamico = PROMPT_DIALOGO_BASE.format(palabras_objetivo=palabras_a_practicar)
-            instruccion = [prompt_dinamico, input_data]
-
-        # Enviar a Gemini
+        registrar_interaccion(chat_id, "user", texto_original if not is_audio else "[Mensaje de Voz]")
+        
+        instruccion = input_data
+        
+        # Lógica estricta si es audio (Pinyin oculto y 0 español)
+        if is_audio:
+            regla_audio = "\n\nREGLA ESTRICTA: El usuario te envió un audio. Responde ÚNICAMENTE en caracteres chinos. PROHIBIDO usar español o traducir. Añade el pinyin pero ocúltalo obligatoriamente usando formato HTML así: <tg-spoiler>pinyin</tg-spoiler>."
+            # Si pasamos un archivo de audio, input_data es el objeto file, así que lo pasamos como lista con el prompt
+            instruccion = [input_data, regla_audio]
+        
         respuesta = chat_session.send_message(instruccion)
         texto_salida = respuesta.text
+        
+        registrar_interaccion(chat_id, "model", texto_salida)
 
-        # Si el usuario envió audio, asumimos que quiere respuesta en audio (TTS)
-        if is_audio or current_mode == 'dialogo':
-            await context.bot.send_chat_action(chat_id=update.effective_chat.id, action='record_voice')
+        if is_audio:
+            await context.bot.send_chat_action(chat_id=chat_id, action='record_voice')
             output_audio_path = f"response_{user_id}.mp3"
             
-            # Limpiar texto para TTS (quitar asteriscos de markdown que puedan afectar la lectura)
-            texto_limpio = texto_salida.replace('*', '')
+            # Limpiar el texto para que el TTS no lea etiquetas HTML o Markdown
+            texto_limpio = texto_salida.replace('<tg-spoiler>', '').replace('</tg-spoiler>', '').replace('*', '')
             
             tts = edge_tts.Communicate(texto_limpio, voice="zh-CN-XiaoxiaoNeural")
             await tts.save(output_audio_path)
             
             with open(output_audio_path, "rb") as audio:
-                await context.bot.send_voice(chat_id=update.effective_chat.id, voice=audio, caption=texto_salida[:1000])
+                # Usamos HTML parse mode para que Telegram renderice el spoiler correctamente
+                await context.bot.send_voice(chat_id=chat_id, voice=audio, caption=texto_salida[:1000], parse_mode='HTML')
             os.remove(output_audio_path)
         else:
-            await update.message.reply_text(texto_salida)
+            await update.message.reply_text(texto_salida, parse_mode='HTML')
             
     except Exception as e:
         await update.message.reply_text(f"Hubo un error procesando la solicitud: {str(e)}")
 
 async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     texto = update.message.text
-    await process_interaction(update, context, texto, is_audio=False)
+    chat_id = update.effective_chat.id
+    
+    # 1. Detectar si es una lista separada por comas
+    if ',' in texto:
+        palabras = [p.strip() for p in texto.split(',') if p.strip()]
+        if len(palabras) > 1:
+            for p in palabras:
+                guardar_palabra(p)
+            await update.message.reply_text(f"✅ Lexy ha guardado estas {len(palabras)} palabras directamente en tu base de datos.")
+            return
+
+    # Si no es una lista, guardar si estamos en enseñanza/evaluación y procesar normal
+    current_mode = user_states.get(update.effective_user.id, 'dialogo')
+    if current_mode in ['ensenanza', 'evaluacion']:
+        guardar_palabra(texto)
+        
+    await process_interaction(update, context, texto, is_audio=False, texto_original=texto)
 
 async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     input_audio_path = f"input_{user_id}.ogg"
     
-    # Descargar audio de Telegram
     voice_file = await context.bot.get_file(update.message.voice.file_id)
     await voice_file.download_to_drive(input_audio_path)
     
-    # Subir a Gemini
     audio_part = client.files.upload(
         file=input_audio_path,
         config={'mime_type': 'audio/ogg'}
@@ -187,7 +273,6 @@ async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     await process_interaction(update, context, audio_part, is_audio=True)
     
-    # Limpieza
     client.files.delete(name=audio_part.name)
     os.remove(input_audio_path)
 
@@ -196,14 +281,17 @@ def main():
     app = Application.builder().token(TELEGRAM_TOKEN).build()
     
     app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("ensenar", set_modo_ensenanza))
-    app.add_handler(CommandHandler("dialogar", set_modo_dialogo))
-    app.add_handler(CommandHandler("exportar", exportar_vocabulario))
+    app.add_handler(CommandHandler("profesora", set_modo_ensenanza))
+    app.add_handler(CommandHandler("evaluar", set_modo_evaluacion))
+    app.add_handler(CommandHandler("amiga", set_modo_dialogo))
     
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
     app.add_handler(MessageHandler(filters.VOICE, handle_voice))
     
-    print("Bot de mandarín iniciado y esperando mensajes...")
+    # Configurar tareas proactivas cada 12 horas
+    app.job_queue.run_repeating(escribir_proactivamente, interval=43200, first=10)
+    
+    print("Lexy Trabajando...")
     app.run_polling()
 
 if __name__ == "__main__":
