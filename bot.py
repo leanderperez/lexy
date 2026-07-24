@@ -213,7 +213,6 @@ async def escribir_proactivamente(context: ContextTypes.DEFAULT_TYPE):
         except Exception as e:
             print(f"Error enviando mensaje proactivo a {chat_id}: {e}")
 
-
 # --- PROCESAMIENTO DE MENSAJES Y AUDIO ---
 async def process_interaction(update: Update, context: ContextTypes.DEFAULT_TYPE, input_data, is_audio=False, texto_original=""):
     user_id = update.effective_user.id
