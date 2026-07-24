@@ -213,8 +213,7 @@ async def process_interaction(update: Update, context: ContextTypes.DEFAULT_TYPE
         
         # Lógica estricta si es audio (Pinyin oculto y 0 español)
         if is_audio:
-            regla_audio = "\n\nREGLA ESTRICTA: El usuario te envió un audio. Responde ÚNICAMENTE en caracteres chinos. PROHIBIDO usar español o traducir. Añade el pinyin pero ocúltalo obligatoriamente usando formato HTML así: <tg-spoiler>pinyin</tg-spoiler>."
-            # Si pasamos un archivo de audio, input_data es el objeto file, así que lo pasamos como lista con el prompt
+            regla_audio = "\n\nREGLA ESTRICTA: El usuario te envió un audio. Responde con caracteres chinos. Puedes incluir pinyin y traducción al español, pero debes ocultar AMBOS obligatoriamente usando formato HTML así: <tg-spoiler>Pinyin y español aquí</tg-spoiler>."
             instruccion = [input_data, regla_audio]
         
         respuesta = chat_session.send_message(instruccion)
@@ -229,7 +228,8 @@ async def process_interaction(update: Update, context: ContextTypes.DEFAULT_TYPE
             # Limpiar el texto para que el TTS no lea etiquetas HTML o Markdown
             texto_limpio = texto_salida.replace('<tg-spoiler>', '').replace('</tg-spoiler>', '').replace('*', '')
             
-            tts = edge_tts.Communicate(texto_limpio, voice="zh-CN-XiaoxiaoNeural")
+            # Un -25% de velocidad equivale a 0.75x
+            tts = edge_tts.Communicate(texto_limpio, voice="zh-TW-HsiaoChenNeural", rate="-25%")
             await tts.save(output_audio_path)
             
             with open(output_audio_path, "rb") as audio:
