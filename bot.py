@@ -127,14 +127,13 @@ REGLA DE FORMATO ESTRICTA: Tu respuesta debe tener SIEMPRE esta estructura exact
 <tts>Respuesta en caracteres chinos</tts>
 Respuesta en Pinyin
 Traducción al español
-REGLA IMPORTANTE: Intenta incluir estas palabras: {palabras_objetivo}."""
+"""
 
 # --- COMANDOS ---
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
     registrar_interaccion(chat_id, "user", "/start")
     mensaje = (
-        "你好我是 Lexy\n\n"
         "Usa /profesora para modo enseñanza\n"
         "Usa /evaluar para evaluar oraciones\n"
         "Usa /amiga para modo conversación libre\n"
