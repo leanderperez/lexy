@@ -122,7 +122,7 @@ Si hay errores, corrígelos, muéstrame el Pinyin y explícame la regla gramatic
 """
 
 PROMPT_DIALOGO_BASE = """Eres Lexy mi compañera de intercambio de idiomas nativa de China. 
-Hablar contigo me sirve para aprender bocabulario del nivel HSK1 3.0 y practcar.
+Hablar contigo me sirve para aprender bocabulario del nivel HSK1 y HSK2 3.0 y practcar.
 REGLA DE FORMATO ESTRICTA: Tu respuesta debe tener SIEMPRE esta estructura exacta, separada por saltos de línea:
 <tts>Respuesta en caracteres chinos</tts>
 Respuesta en Pinyin
@@ -137,6 +137,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "Usa /profesora para modo enseñanza\n"
         "Usa /evaluar para evaluar oraciones\n"
         "Usa /amiga para modo conversación libre\n"
+        "Usa /noticias para leer actualidad en HSK 2\n"
     )
     await update.message.reply_text(mensaje)
 
@@ -159,7 +160,6 @@ async def set_modo_dialogo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     palabras_a_practicar = ", ".join(obtener_palabras_recientes(5))
     prompt_dinamico = PROMPT_DIALOGO_BASE.format(palabras_objetivo=palabras_a_practicar)
     
-    # Al iniciar el diálogo, recuperamos la memoria
     historial = recuperar_historial(chat_id)
     user_sessions[update.effective_user.id] = client.chats.create(
         model='gemini-3.5-flash-lite', 
@@ -167,6 +167,54 @@ async def set_modo_dialogo(update: Update, context: ContextTypes.DEFAULT_TYPE):
         config={'system_instruction': prompt_dinamico}
     )
     await update.message.reply_text("🗣️ Modo Diálogo activado. ¡Hablemos!")
+
+async def enviar_noticias(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    chat_id = update.effective_chat.id
+    await context.bot.send_chat_action(chat_id=chat_id, action='typing')
+    await update.message.reply_text("📰 Buscando las últimas noticias de China para ti...")
+    
+    prompt_noticias = """Actúa como un presentador de noticias. Resume 2 noticias reales e importantes sobre la actualidad de China.
+    REGLA VITAL: Usa EXCLUSIVAMENTE gramática y vocabulario del nivel HSK 1 y 2. El lenguaje debe ser muy sencillo de leer.
+    REGLA DE FORMATO ESTRICTA, usa esta estructura exacta para cada noticia separada por saltos de línea:
+    <tts>Noticia en caracteres chinos</tts>
+    Pinyin
+    Traducción al español"""
+
+    try:
+        # Usamos una llamada directa al modelo en lugar de una sesión de chat para no contaminar la memoria del diálogo
+        respuesta = client.models.generate_content(
+            model='gemini-3.5-flash-lite',
+            contents=prompt_noticias
+        )
+        texto_salida = respuesta.text
+        
+        registrar_interaccion(chat_id, "user", "/noticias")
+        registrar_interaccion(chat_id, "model", texto_salida)
+
+        # --- GENERAR EL AUDIO DE LAS NOTICIAS ---
+        await context.bot.send_chat_action(chat_id=chat_id, action='record_voice')
+        output_audio_path = f"news_{chat_id}.mp3"
+        
+        matches = re.findall(r'<tts>(.*?)</tts>', texto_salida, re.DOTALL)
+        texto_para_audio = " ".join(matches).replace('*', '').strip() if matches else texto_salida.replace('*', '')
+        
+        # Audio ligeramente más lento para facilitar la comprensión de las noticias
+        tts = edge_tts.Communicate(texto_para_audio, voice="zh-CN-XiaoxiaoNeural", rate="-20%")
+        await tts.save(output_audio_path)
+        
+        with open(output_audio_path, "rb") as audio:
+            await context.bot.send_voice(chat_id=chat_id, voice=audio)
+        os.remove(output_audio_path)
+
+        # --- ENVIAR EL TEXTO DIRECTO (Sin Spoiler) ---
+        texto_telegram = texto_salida.replace('<tts>', '').replace('</tts>', '').strip()
+        texto_seguro = html.escape(texto_telegram)
+        
+        await context.bot.send_message(chat_id=chat_id, text=texto_seguro, parse_mode='HTML')
+
+    except Exception as e:
+        await update.message.reply_text(f"Hubo un error buscando noticias: {str(e)}")
+
 
 # --- TAREAS PROACTIVAS (2 VECES AL DÍA) ---
 async def escribir_proactivamente(context: ContextTypes.DEFAULT_TYPE):
@@ -187,9 +235,7 @@ async def escribir_proactivamente(context: ContextTypes.DEFAULT_TYPE):
             
             registrar_interaccion(chat_id, "model", texto_salida)
 
-            # --- 1. GENERAR EL AUDIO PROACTIVO ---
             output_audio_path = f"proactive_{chat_id}.mp3"
-            
             matches = re.findall(r'<tts>(.*?)</tts>', texto_salida, re.DOTALL)
             texto_para_audio = " ".join(matches).replace('*', '').strip() if matches else texto_salida.replace('*', '')
             
@@ -200,7 +246,6 @@ async def escribir_proactivamente(context: ContextTypes.DEFAULT_TYPE):
                 await context.bot.send_voice(chat_id=chat_id, voice=audio)
             os.remove(output_audio_path)
 
-            # --- 2. LIMPIAR Y OCULTAR EL TEXTO ---
             texto_telegram = texto_salida.replace('<tts>', '').replace('</tts>', '').strip()
             texto_seguro = html.escape(texto_telegram)
             texto_oculto = f"<tg-spoiler>{texto_seguro}</tg-spoiler>"
@@ -241,12 +286,10 @@ async def process_interaction(update: Update, context: ContextTypes.DEFAULT_TYPE
         
         registrar_interaccion(chat_id, "model", texto_salida)
 
-        # --- LIMPIEZA DE TEXTO (Para todos los modos) ---
         texto_telegram = texto_salida.replace('<tts>', '').replace('</tts>', '').strip()
         texto_seguro = html.escape(texto_telegram)
 
         if current_mode == 'dialogo':
-            # --- SOLO EN MODO DIÁLOGO: GENERAR AUDIO Y OCULTAR TEXTO ---
             await context.bot.send_chat_action(chat_id=chat_id, action='record_voice')
             output_audio_path = f"response_{user_id}.mp3"
             
@@ -264,8 +307,6 @@ async def process_interaction(update: Update, context: ContextTypes.DEFAULT_TYPE
             await context.bot.send_message(chat_id=chat_id, text=texto_final, parse_mode='HTML')
             
         else:
-            # --- MODO ENSEÑANZA Y EVALUACIÓN ---
-            # No enviamos audio, y el texto va directo sin ocultar
             texto_final = texto_seguro
             await context.bot.send_message(chat_id=chat_id, text=texto_final, parse_mode='HTML')
             
@@ -276,7 +317,6 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     texto = update.message.text
     chat_id = update.effective_chat.id
     
-    # 1. Detectar si es una lista separada por comas
     if ',' in texto:
         palabras = [p.strip() for p in texto.split(',') if p.strip()]
         if len(palabras) > 1:
@@ -285,7 +325,6 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text(f"✅ Lexy ha guardado estas {len(palabras)} palabras directamente en tu base de datos.")
             return
 
-    # Si no es una lista, guardar si estamos en enseñanza/evaluación y procesar normal
     current_mode = user_states.get(update.effective_user.id, 'dialogo')
     if current_mode in ['ensenanza', 'evaluacion']:
         guardar_palabra(texto)
@@ -314,6 +353,7 @@ async def configurar_menu(application: Application):
         BotCommand("profesora", "📚 Modo Enseñanza (Retos y vocabulario)"),
         BotCommand("evaluar", "📝 Modo Evaluación (Corregir oraciones)"),
         BotCommand("amiga", "🗣️ Modo Conversación (Diálogo libre)"),
+        BotCommand("noticias", "📰 Noticias de China"),
         BotCommand("start", "🔄 Ver mensaje de bienvenida")
     ])
 
@@ -325,11 +365,11 @@ def main():
     app.add_handler(CommandHandler("profesora", set_modo_ensenanza))
     app.add_handler(CommandHandler("evaluar", set_modo_evaluacion))
     app.add_handler(CommandHandler("amiga", set_modo_dialogo))
+    app.add_handler(CommandHandler("noticias", enviar_noticias))
     
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
     app.add_handler(MessageHandler(filters.VOICE, handle_voice))
     
-    # Configurar tareas proactivas cada 12 horas
     app.job_queue.run_repeating(escribir_proactivamente, interval=43200, first=10)
     
     print("Lexy Trabajando...")
