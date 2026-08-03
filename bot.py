@@ -316,14 +316,6 @@ async def process_interaction(update: Update, context: ContextTypes.DEFAULT_TYPE
 async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     texto = update.message.text
     chat_id = update.effective_chat.id
-    
-    if ',' in texto:
-        palabras = [p.strip() for p in texto.split(',') if p.strip()]
-        if len(palabras) > 1:
-            for p in palabras:
-                guardar_palabra(p)
-            await update.message.reply_text(f"✅ Lexy ha guardado estas {len(palabras)} palabras directamente en tu base de datos.")
-            return
 
     current_mode = user_states.get(update.effective_user.id, 'dialogo')
     if current_mode in ['ensenanza', 'evaluacion']:
