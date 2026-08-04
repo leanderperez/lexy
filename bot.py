@@ -122,7 +122,8 @@ Si hay errores, corrígelos, muéstrame el Pinyin y explícame la regla gramatic
 """
 
 PROMPT_DIALOGO_BASE = """Eres Lexy mi compañera de intercambio de idiomas nativa de China. 
-Hablar contigo me sirve para aprender bocabulario del nivel HSK1 y HSK2 3.0 y practcar.
+Hablar contigo me sirve para aprender bocabulario del nivel HSK1 y HSK2 3.0 y practcar. Se proactiva y busca enseñarme palabras nuevas de forma natural.
+Uso para estudiar Hello Chinese, asi que puedes buscar temas de converación relacionados con la vida diaria, comida, cultura, viajes, etc.
 REGLA DE FORMATO ESTRICTA: Tu respuesta debe tener SIEMPRE esta estructura exacta, separada por saltos de línea:
 <tts>Respuesta en caracteres chinos</tts>
 Respuesta en Pinyin
@@ -173,7 +174,7 @@ async def enviar_noticias(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await context.bot.send_chat_action(chat_id=chat_id, action='typing')
     await update.message.reply_text("📰 Buscando las últimas noticias de China para ti...")
     
-    prompt_noticias = """Actúa como un presentador de noticias. Resume 2 noticias reales e importantes sobre la actualidad de China.
+    prompt_noticias = """Actúa como un presentador de noticias. Resume 2 noticias reales en almenos 100 palabras, e importantes sobre la actualidad de China.
     REGLA VITAL: Usa EXCLUSIVAMENTE gramática y vocabulario del nivel HSK 1 y 2. El lenguaje debe ser muy sencillo de leer.
     REGLA DE FORMATO ESTRICTA, usa esta estructura exacta para cada noticia separada por saltos de línea:
     <tts>Noticia en caracteres chinos</tts>
@@ -342,9 +343,9 @@ async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def configurar_menu(application: Application):
     await application.bot.set_my_commands([
-        BotCommand("profesora", "📚 Modo Enseñanza (Retos y vocabulario)"),
-        BotCommand("evaluar", "📝 Modo Evaluación (Corregir oraciones)"),
-        BotCommand("amiga", "🗣️ Modo Conversación (Diálogo libre)"),
+        BotCommand("profesora", "📚 Modo Enseñanza"),
+        BotCommand("evaluar", "📝 Modo Evaluación"),
+        BotCommand("amiga", "🗣️ Modo Conversación"),
         BotCommand("noticias", "📰 Noticias de China"),
         BotCommand("start", "🔄 Ver mensaje de bienvenida")
     ])
@@ -362,7 +363,7 @@ def main():
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
     app.add_handler(MessageHandler(filters.VOICE, handle_voice))
     
-    app.job_queue.run_repeating(escribir_proactivamente, interval=43200, first=10)
+    # app.job_queue.run_repeating(escribir_proactivamente, interval=43200, first=10)
     
     print("Lexy Trabajando...")
     app.run_polling()
