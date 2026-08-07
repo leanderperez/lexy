@@ -199,7 +199,7 @@ async def enviar_noticias(update: Update, context: ContextTypes.DEFAULT_TYPE):
         texto_para_audio = " ".join(matches).replace('*', '').strip() if matches else texto_salida.replace('*', '')
         
         # Audio ligeramente más lento para facilitar la comprensión de las noticias
-        tts = edge_tts.Communicate(texto_para_audio, voice="zh-CN-XiaoxiaoNeural", rate="-20%")
+        tts = edge_tts.Communicate(texto_para_audio, voice="zh-CN-XiaoxiaoNeural", rate="-25%")
         await tts.save(output_audio_path)
         
         with open(output_audio_path, "rb") as audio:
@@ -296,7 +296,7 @@ async def process_interaction(update: Update, context: ContextTypes.DEFAULT_TYPE
             matches = re.findall(r'<tts>(.*?)</tts>', texto_salida, re.DOTALL)
             texto_para_audio = " ".join(matches).replace('*', '').strip() if matches else texto_salida.replace('*', '')
             
-            tts = edge_tts.Communicate(texto_para_audio, voice="zh-CN-XiaoxiaoNeural", rate="-25%")
+            tts = edge_tts.Communicate(texto_para_audio, voice="zh-CN-XiaochenNeural", rate="-25%")
             await tts.save(output_audio_path)
             
             with open(output_audio_path, "rb") as audio:
