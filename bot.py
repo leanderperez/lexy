@@ -200,31 +200,38 @@ async def set_modo_examen(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def enviar_noticias(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
     await context.bot.send_chat_action(chat_id=chat_id, action='typing')
-    await update.message.reply_text("📰 Buscando las últimas noticias de China para ti...")
+    await update.message.reply_text("📰 Conectando a internet para buscar las últimas noticias de China...")
     
-    prompt_noticias = """Actúa como un presentador de noticias. Resume 2 noticias reales e importantes de algun medio de noticas chino, algun articulo de periodico sobre la actualidad de China. 
-    REGLA VITAL: Usa EXCLUSIVAMENTE gramática y vocabulario del nivel HSK 1 y 2.
+    prompt_noticias = """Busca en internet las noticias más importantes de HOY en China. Elige 2 noticias reales y actuales (pueden ser de tecnología, sociedad, clima o eventos) y resúmelas.
+    REGLA VITAL 1: Tienes que basarte en hechos reales que encuentres en tu búsqueda, no inventes nada.
+    REGLA VITAL 2: Usa EXCLUSIVAMENTE gramática y vocabulario del nivel HSK 1 y HSK 2. Simplifica las noticias complejas para que un estudiante principiante pueda leerlas.
     REGLA DE FORMATO ESTRICTA, usa esta estructura exacta para cada noticia separada por saltos de línea:
     <tts>Noticia en caracteres chinos</tts>
     Pinyin
     Traducción al español"""
 
     try:
+        # Usamos gemini-2.5-flash porque es excelente manejando herramientas como Google Search
         respuesta = client.models.generate_content(
-            model='gemini-3.5-flash-lite',
-            contents=prompt_noticias
+            model='gemini-2.5-flash',
+            contents=prompt_noticias,
+            config=types.GenerateContentConfig(
+                tools=[{"google_search": {}}] # <--- ESTA ES LA MAGIA QUE LE DA ACCESO A INTERNET
+            )
         )
         texto_salida = respuesta.text
         
         registrar_interaccion(chat_id, "user", "/noticias")
         registrar_interaccion(chat_id, "model", texto_salida)
 
+        # --- GENERAR EL AUDIO DE LAS NOTICIAS ---
         await context.bot.send_chat_action(chat_id=chat_id, action='record_voice')
         output_audio_path = f"news_{chat_id}.mp3"
         
         matches = re.findall(r'<tts>(.*?)</tts>', texto_salida, re.DOTALL)
         texto_para_audio = " ".join(matches).replace('*', '').strip() if matches else texto_salida.replace('*', '')
         
+        # Audio ligeramente más lento para facilitar la comprensión de las noticias
         tts = edge_tts.Communicate(texto_para_audio, voice="zh-CN-XiaoxiaoNeural", rate="-25%")
         await tts.save(output_audio_path)
         
@@ -232,6 +239,7 @@ async def enviar_noticias(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await context.bot.send_voice(chat_id=chat_id, voice=audio)
         os.remove(output_audio_path)
 
+        # --- ENVIAR EL TEXTO DIRECTO (Sin Spoiler) ---
         texto_telegram = texto_salida.replace('<tts>', '').replace('</tts>', '').strip()
         texto_seguro = html.escape(texto_telegram)
         
