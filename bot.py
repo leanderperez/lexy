@@ -134,7 +134,7 @@ REGLAS DEL EXAMEN:
    - 📝 LECTURA: Preguntas de opción múltiple, completar espacios en blanco o verdadero/falso. (NO uses etiquetas <tts>).
    - ✍️ ESCRITURA: Pídeme redactar una o varias oraciones utilizando vocabulario específico o gramática del nivel. (NO uses etiquetas <tts>).
    - 🗣️ EXPRESIÓN ORAL (HSKK): Descríbeme una situación y exígeme explícitamente que te responda mediante un Mensaje de Voz.
-   - 👂 COMPRENSIÓN AUDITIVA: Para esto, DEBES envolver la frase en chino dentro de <tts> y </tts> (ej: <tts>今天天气很好</tts>). El sistema generará un audio para que yo lo escuche a ciegas. Hazme una pregunta de comprensión sobre lo que escuché.
+   - 👂 COMPRENSIÓN AUDITIVA: ¡ATENCIÓN! Escribe SOLO los caracteres chinos de la frase a escuchar entre <tts> y </tts>. PROHIBIDO escribir el pinyin o la traducción al español de esa frase en el texto (para que yo no pueda hacer trampa). Luego, debajo, hazme la pregunta de comprensión y dame las opciones (A, B, C) en español.
 4. Tras mi respuesta, dime si acerté o fallé, corrige mis errores, y dame mi puntuación acumulada. Luego hazme inmediatamente la siguiente pregunta.
 """
 
@@ -202,7 +202,7 @@ async def enviar_noticias(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await context.bot.send_chat_action(chat_id=chat_id, action='typing')
     await update.message.reply_text("📰 Buscando las últimas noticias de China para ti...")
     
-    prompt_noticias = """Actúa como un presentador de noticias. Resume 2 noticias reales e importantes sobre la actualidad de China en al menos 200 caracteres,
+    prompt_noticias = """Actúa como un presentador de noticias. Resume 2 noticias reales e importantes de algun medio de noticas chino, algun articulo de periodico sobre la actualidad de China. 
     REGLA VITAL: Usa EXCLUSIVAMENTE gramática y vocabulario del nivel HSK 1 y 2.
     REGLA DE FORMATO ESTRICTA, usa esta estructura exacta para cada noticia separada por saltos de línea:
     <tts>Noticia en caracteres chinos</tts>
@@ -303,18 +303,22 @@ async def process_interaction(update: Update, context: ContextTypes.DEFAULT_TYPE
         
         instruccion = input_data
         if is_audio:
-            # En el examen, un audio es una respuesta de HSKK, así que la evaluamos directamente
+            # En el examen, un audio es una respuesta de HSKK
             instruccion = [input_data, "Aquí tienes mi respuesta en audio. Por favor, evalúala y envíame la corrección."]
         
         respuesta = chat_session.send_message(instruccion)
         texto_salida = respuesta.text
         
+        # --- SOLUCIÓN AL ERROR NoneType ---
+        if not texto_salida:
+            await update.message.reply_text("Hubo un pequeño corte en la conexión y no recibí bien la respuesta. ¿Puedes reenviarlo, por favor?")
+            return
+            
         registrar_interaccion(chat_id, "model", texto_salida)
 
         matches = re.findall(r'<tts>(.*?)</tts>', texto_salida, re.DOTALL)
         
-        # --- LÓGICA DE AUDIO DINÁMICA ---
-        # Se genera audio SIEMPRE en diálogo, o si en el examen Lexy usó explícitamente <tts>
+        # --- 1. LÓGICA DE AUDIO DINÁMICA ---
         if current_mode == 'dialogo' or matches:
             await context.bot.send_chat_action(chat_id=chat_id, action='record_voice')
             output_audio_path = f"response_{user_id}.mp3"
@@ -328,16 +332,18 @@ async def process_interaction(update: Update, context: ContextTypes.DEFAULT_TYPE
                 await context.bot.send_voice(chat_id=chat_id, voice=audio)
             os.remove(output_audio_path)
 
-            texto_telegram = texto_salida.replace('<tts>', '').replace('</tts>', '').strip()
-            texto_seguro = html.escape(texto_telegram)
+        # --- 2. LÓGICA DE TEXTO Y SPOILER ---
+        texto_telegram = texto_salida.replace('<tts>', '').replace('</tts>', '').strip()
+        texto_seguro = html.escape(texto_telegram)
+        
+        if current_mode == 'dialogo':
+            # Solo en conversación libre ocultamos TODO el texto
             texto_final = f"<tg-spoiler>{texto_seguro}</tg-spoiler>"
-            await context.bot.send_message(chat_id=chat_id, text=texto_final, parse_mode='HTML')
-            
         else:
-            # Modo enseñanza, evaluación o lectura del examen (sin audio)
-            texto_telegram = texto_salida.replace('<tts>', '').replace('</tts>', '').strip()
-            texto_seguro = html.escape(texto_telegram)
-            await context.bot.send_message(chat_id=chat_id, text=texto_seguro, parse_mode='HTML')
+            # En examen, enseñanza o lectura se muestra normal sin el spoiler
+            texto_final = texto_seguro
+
+        await context.bot.send_message(chat_id=chat_id, text=texto_final, parse_mode='HTML')
             
     except Exception as e:
         await update.message.reply_text(f"Hubo un error procesando la solicitud: {str(e)}")
