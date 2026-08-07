@@ -111,18 +111,17 @@ Una vez que yo te envíe la palabra, seguiremos este método estructurado:
 1. Análisis del Carácter: Explica brevemente el significado del carácter, su componente visual o radical, y su lógica básica.
 2. Regla de Tres (Usos Clave): Muestra entre 2 y 3 palabras compuestas o estructuras hipercomunes en las que este carácter sea protagonista en la vida diaria. Incluye caracteres, Pinyin y traducción.
 3. El Reto de Chat (Práctica Activa): Plantéame un escenario cotidiano real y pídeme que redacte una frase corta usando la palabra nueva combinada con lo que ya sé. Dame pistas claras para guiar mi respuesta.
-4. Feedback Inmediato y Natural: Cuando yo responda al reto, valida mi frase. Si cometo un error sutil de gramática o naturalidad, corrígelo de forma directa y amable, explicando el porqué, y muestra cómo lo diría un nativo.
+4. Feedback: Cuando yo responda al reto, valida mi frase. Si cometo un error sutil de gramática o naturalidad, corrígelo de forma directa y amable, explicando el porqué, y muestra cómo lo diría un nativo.
 5. El Contador del Bloque: Mantén un registro visual al final de cada respuesta. Vamos a agrupar las palabras de 5 en 5. Cuando completemos un bloque de 5 palabras, detén el avance y hazme un examen/repaso general usando todas las palabras de ese bloque en un diálogo integrado.
 """
 
 PROMPT_EVALUACION = """Eres Lexy, actua como mi profesora de chino mandarín nativo. 
-Voy a escribir oraciones creadas por mí. No las traduzcas directamente. 
-Evalúa si la gramática es correcta y si suena natural para un nativo. 
+Voy a escribir oraciones creadas por mí. No las traduzcas directamente. Evalúa si la gramática es correcta y si suena natural para un nativo. 
 Si hay errores, corrígelos, muéstrame el Pinyin y explícame la regla gramatical en español de forma simple.
 """
 
 PROMPT_DIALOGO_BASE = """Eres Lexy mi compañera de intercambio de idiomas nativa de China. 
-Hablar contigo me sirve para aprender bocabulario del nivel HSK1 y HSK2 3.0 y practcar. Se proactiva y busca enseñarme palabras nuevas de forma natural.
+Hablar contigo me sirve para aprender practicar bocabulario del nivel HSK1 y HSK2 3.0. Se proactiva y busca enseñarme palabras nuevas de forma natural.
 Uso para estudiar Hello Chinese, asi que puedes buscar temas de converación relacionados con la vida diaria, comida, cultura, viajes, etc.
 REGLA DE FORMATO ESTRICTA: Tu respuesta debe tener SIEMPRE esta estructura exacta, separada por saltos de línea:
 <tts>Respuesta en caracteres chinos</tts>
@@ -174,8 +173,8 @@ async def enviar_noticias(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await context.bot.send_chat_action(chat_id=chat_id, action='typing')
     await update.message.reply_text("📰 Buscando las últimas noticias de China para ti...")
     
-    prompt_noticias = """Actúa como un presentador de noticias. Resume 2 noticias reales en almenos 100 palabras, e importantes sobre la actualidad de China.
-    REGLA VITAL: Usa EXCLUSIVAMENTE gramática y vocabulario del nivel HSK 1 y 2. El lenguaje debe ser muy sencillo de leer.
+    prompt_noticias = """Actúa como un presentador de noticias. Resume 2 noticias reales e importantes sobre la actualidad de China en al menos 200 caracteres,
+    REGLA VITAL: Usa EXCLUSIVAMENTE gramática y vocabulario del nivel HSK 1 y 2.
     REGLA DE FORMATO ESTRICTA, usa esta estructura exacta para cada noticia separada por saltos de línea:
     <tts>Noticia en caracteres chinos</tts>
     Pinyin
