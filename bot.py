@@ -30,7 +30,6 @@ DB_FILE = 'vocabulario.db'
 def init_db():
     conn = sqlite3.connect(DB_FILE)
     cursor = conn.cursor()
-    # Tabla de vocabulario
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS palabras (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -38,14 +37,12 @@ def init_db():
             fecha TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
     ''')
-    # Tabla para guardar a los usuarios (necesario para mensajes proactivos)
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS usuarios (
             chat_id INTEGER PRIMARY KEY,
             ultimo_contacto TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
     ''')
-    # Tabla de historial para la memoria de Lexy
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS historial (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -71,9 +68,7 @@ def guardar_palabra(palabra):
 def registrar_interaccion(chat_id, rol, contenido):
     conn = sqlite3.connect(DB_FILE)
     cursor = conn.cursor()
-    # Actualizar la fecha del usuario
     cursor.execute("INSERT OR REPLACE INTO usuarios (chat_id, ultimo_contacto) VALUES (?, CURRENT_TIMESTAMP)", (chat_id,))
-    # Guardar en el historial
     cursor.execute("INSERT INTO historial (chat_id, rol, contenido) VALUES (?, ?, ?)", (chat_id, rol, contenido))
     conn.commit()
     conn.close()
@@ -86,7 +81,7 @@ def obtener_palabras_recientes(limite=5):
     conn.close()
     return palabras
 
-def recuperar_historial(chat_id, limite=10):
+def recuperar_historial(chat_id, limite=20):
     conn = sqlite3.connect(DB_FILE)
     cursor = conn.cursor()
     cursor.execute("SELECT rol, contenido FROM historial WHERE chat_id = ? ORDER BY fecha DESC LIMIT ?", (chat_id, limite))
@@ -94,7 +89,6 @@ def recuperar_historial(chat_id, limite=10):
     conn.close()
     
     historial_gemini = []
-    # Invertimos para que el orden cronológico sea correcto para Gemini
     for rol, contenido in reversed(filas):
         historial_gemini.append(
             types.Content(role=rol, parts=[types.Part.from_text(text=contenido)])
@@ -122,11 +116,26 @@ Si hay errores, corrígelos, muéstrame el Pinyin y explícame la regla gramatic
 
 PROMPT_DIALOGO_BASE = """Eres Lexy mi compañera de intercambio de idiomas nativa de China. 
 Hablar contigo me sirve para aprender practicar bocabulario del nivel HSK1 3.0 y HSK2 3.0 inicial. Se proactiva y busca enseñarme palabras nuevas de forma natural.
-Uso para estudiar Hello Chinese, asi que puedes buscar temas de converación relacionados con la vida diaria, comida, cultura, viajes, gustos etc.
+Uso para estudiar Hello Chinese, asi que puedes buscar temas de converación relacionados con la vida diaria, comida, cultura, viajes, gustos, etc.
+Evalua en mi respuesta si la gramática es correcta y si suena natural para un nativo. Si hay errores corrigelos de forma directa y explicame como lo diria un nativo
 REGLA DE FORMATO ESTRICTA: Tu respuesta debe tener SIEMPRE esta estructura exacta, separada por saltos de línea:
 <tts>Respuesta en caracteres chinos</tts>
 Respuesta en Pinyin
 Traducción al español
+"""
+
+PROMPT_EXAMEN = """Eres un examinador oficial de las pruebas HSK y HSKK. Mi meta es certificarme en HSK 3 y HSKK.
+Estamos en una simulación de examen oficial (Mock Test). Revisa el historial para NO repetir preguntas que ya me hayas hecho.
+
+REGLAS DEL EXAMEN:
+1. Al iniciar, pregúntame qué nivel deseo evaluar hoy (HSK 1, 2, 3 o HSKK). No comiences el examen hasta que te responda.
+2. Haz SOLO UNA pregunta a la vez. No avances a la siguiente hasta que yo haya respondido y tú me hayas calificado.
+3. Alterna de forma dinámica entre estos 4 tipos de evaluación:
+   - 📝 LECTURA: Preguntas de opción múltiple, completar espacios en blanco o verdadero/falso. (NO uses etiquetas <tts>).
+   - ✍️ ESCRITURA: Pídeme redactar una o varias oraciones utilizando vocabulario específico o gramática del nivel. (NO uses etiquetas <tts>).
+   - 🗣️ EXPRESIÓN ORAL (HSKK): Descríbeme una situación y exígeme explícitamente que te responda mediante un Mensaje de Voz.
+   - 👂 COMPRENSIÓN AUDITIVA: Para esto, DEBES envolver la frase en chino dentro de <tts> y </tts> (ej: <tts>今天天气很好</tts>). El sistema generará un audio para que yo lo escuche a ciegas. Hazme una pregunta de comprensión sobre lo que escuché.
+4. Tras mi respuesta, dime si acerté o fallé, corrige mis errores, y dame mi puntuación acumulada. Luego hazme inmediatamente la siguiente pregunta.
 """
 
 # --- COMANDOS ---
@@ -138,6 +147,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "Usa /evaluar para evaluar oraciones\n"
         "Usa /amiga para modo conversación libre\n"
         "Usa /noticias para leer actualidad en HSK 2\n"
+        "Usa /examen para simular prueba HSK/HSKK\n"
     )
     await update.message.reply_text(mensaje)
 
@@ -168,6 +178,25 @@ async def set_modo_dialogo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
     await update.message.reply_text("🗣️ Modo Diálogo activado. ¡Hablemos!")
 
+async def set_modo_examen(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    chat_id = update.effective_chat.id
+    user_states[update.effective_user.id] = 'examen'
+    
+    # Recuperamos bastante historial para que recuerde preguntas pasadas y evite repetirlas
+    historial = recuperar_historial(chat_id, limite=20)
+    user_sessions[update.effective_user.id] = client.chats.create(
+        model='gemini-3.5-flash-lite', 
+        history=historial,
+        config={'system_instruction': PROMPT_EXAMEN}
+    )
+    # Iniciamos el examen pasando un trigger en blanco para que Lexy pregunte el nivel
+    chat_session = user_sessions[update.effective_user.id]
+    respuesta = chat_session.send_message("¡Hola! Estoy listo para empezar un simulacro de examen.")
+    texto_salida = respuesta.text
+    registrar_interaccion(chat_id, "model", texto_salida)
+    
+    await update.message.reply_text(f"📝 <b>Módulo de Examen Activado</b>\n\n{texto_salida}", parse_mode='HTML')
+
 async def enviar_noticias(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
     await context.bot.send_chat_action(chat_id=chat_id, action='typing')
@@ -181,7 +210,6 @@ async def enviar_noticias(update: Update, context: ContextTypes.DEFAULT_TYPE):
     Traducción al español"""
 
     try:
-        # Usamos una llamada directa al modelo en lugar de una sesión de chat para no contaminar la memoria del diálogo
         respuesta = client.models.generate_content(
             model='gemini-3.5-flash-lite',
             contents=prompt_noticias
@@ -191,14 +219,12 @@ async def enviar_noticias(update: Update, context: ContextTypes.DEFAULT_TYPE):
         registrar_interaccion(chat_id, "user", "/noticias")
         registrar_interaccion(chat_id, "model", texto_salida)
 
-        # --- GENERAR EL AUDIO DE LAS NOTICIAS ---
         await context.bot.send_chat_action(chat_id=chat_id, action='record_voice')
         output_audio_path = f"news_{chat_id}.mp3"
         
         matches = re.findall(r'<tts>(.*?)</tts>', texto_salida, re.DOTALL)
         texto_para_audio = " ".join(matches).replace('*', '').strip() if matches else texto_salida.replace('*', '')
         
-        # Audio ligeramente más lento para facilitar la comprensión de las noticias
         tts = edge_tts.Communicate(texto_para_audio, voice="zh-CN-XiaoxiaoNeural", rate="-25%")
         await tts.save(output_audio_path)
         
@@ -206,7 +232,6 @@ async def enviar_noticias(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await context.bot.send_voice(chat_id=chat_id, voice=audio)
         os.remove(output_audio_path)
 
-        # --- ENVIAR EL TEXTO DIRECTO (Sin Spoiler) ---
         texto_telegram = texto_salida.replace('<tts>', '').replace('</tts>', '').strip()
         texto_seguro = html.escape(texto_telegram)
         
@@ -214,7 +239,6 @@ async def enviar_noticias(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     except Exception as e:
         await update.message.reply_text(f"Hubo un error buscando noticias: {str(e)}")
-
 
 # --- TAREAS PROACTIVAS (2 VECES AL DÍA) ---
 async def escribir_proactivamente(context: ContextTypes.DEFAULT_TYPE):
@@ -261,7 +285,7 @@ async def process_interaction(update: Update, context: ContextTypes.DEFAULT_TYPE
     chat_id = update.effective_chat.id
     current_mode = user_states.get(user_id, 'dialogo')
     
-    if current_mode != 'dialogo' and user_id not in user_sessions:
+    if current_mode not in ['dialogo', 'examen'] and user_id not in user_sessions:
         user_sessions[user_id] = client.chats.create(model='gemini-3.5-flash-lite')
         
     chat_session = user_sessions.get(user_id)
@@ -279,21 +303,22 @@ async def process_interaction(update: Update, context: ContextTypes.DEFAULT_TYPE
         
         instruccion = input_data
         if is_audio:
-            instruccion = [input_data, "El usuario te envió un mensaje de voz. Responde siguiendo tus reglas estrictas de formato: <tts>, pinyin y español separados por saltos de línea."]
+            # En el examen, un audio es una respuesta de HSKK, así que la evaluamos directamente
+            instruccion = [input_data, "Aquí tienes mi respuesta en audio. Por favor, evalúala y envíame la corrección."]
         
         respuesta = chat_session.send_message(instruccion)
         texto_salida = respuesta.text
         
         registrar_interaccion(chat_id, "model", texto_salida)
 
-        texto_telegram = texto_salida.replace('<tts>', '').replace('</tts>', '').strip()
-        texto_seguro = html.escape(texto_telegram)
-
-        if current_mode == 'dialogo':
+        matches = re.findall(r'<tts>(.*?)</tts>', texto_salida, re.DOTALL)
+        
+        # --- LÓGICA DE AUDIO DINÁMICA ---
+        # Se genera audio SIEMPRE en diálogo, o si en el examen Lexy usó explícitamente <tts>
+        if current_mode == 'dialogo' or matches:
             await context.bot.send_chat_action(chat_id=chat_id, action='record_voice')
             output_audio_path = f"response_{user_id}.mp3"
             
-            matches = re.findall(r'<tts>(.*?)</tts>', texto_salida, re.DOTALL)
             texto_para_audio = " ".join(matches).replace('*', '').strip() if matches else texto_salida.replace('*', '')
             
             tts = edge_tts.Communicate(texto_para_audio, voice="zh-CN-XiaoxiaoNeural", rate="-25%")
@@ -303,12 +328,16 @@ async def process_interaction(update: Update, context: ContextTypes.DEFAULT_TYPE
                 await context.bot.send_voice(chat_id=chat_id, voice=audio)
             os.remove(output_audio_path)
 
+            texto_telegram = texto_salida.replace('<tts>', '').replace('</tts>', '').strip()
+            texto_seguro = html.escape(texto_telegram)
             texto_final = f"<tg-spoiler>{texto_seguro}</tg-spoiler>"
             await context.bot.send_message(chat_id=chat_id, text=texto_final, parse_mode='HTML')
             
         else:
-            texto_final = texto_seguro
-            await context.bot.send_message(chat_id=chat_id, text=texto_final, parse_mode='HTML')
+            # Modo enseñanza, evaluación o lectura del examen (sin audio)
+            texto_telegram = texto_salida.replace('<tts>', '').replace('</tts>', '').strip()
+            texto_seguro = html.escape(texto_telegram)
+            await context.bot.send_message(chat_id=chat_id, text=texto_seguro, parse_mode='HTML')
             
     except Exception as e:
         await update.message.reply_text(f"Hubo un error procesando la solicitud: {str(e)}")
@@ -316,6 +345,14 @@ async def process_interaction(update: Update, context: ContextTypes.DEFAULT_TYPE
 async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     texto = update.message.text
     chat_id = update.effective_chat.id
+    
+    if ',' in texto:
+        palabras = [p.strip() for p in texto.split(',') if p.strip()]
+        if len(palabras) > 1:
+            for p in palabras:
+                guardar_palabra(p)
+            await update.message.reply_text(f"✅ Lexy ha guardado estas {len(palabras)} palabras directamente en tu base de datos.")
+            return
 
     current_mode = user_states.get(update.effective_user.id, 'dialogo')
     if current_mode in ['ensenanza', 'evaluacion']:
@@ -346,6 +383,7 @@ async def configurar_menu(application: Application):
         BotCommand("evaluar", "📝 Modo Evaluación"),
         BotCommand("amiga", "🗣️ Modo Conversación"),
         BotCommand("noticias", "📰 Noticias de China"),
+        BotCommand("examen", "📝 Simulacro HSK/HSKK"),
         BotCommand("start", "🔄 Ver mensaje de bienvenida")
     ])
 
@@ -358,6 +396,7 @@ def main():
     app.add_handler(CommandHandler("evaluar", set_modo_evaluacion))
     app.add_handler(CommandHandler("amiga", set_modo_dialogo))
     app.add_handler(CommandHandler("noticias", enviar_noticias))
+    app.add_handler(CommandHandler("examen", set_modo_examen))
     
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
     app.add_handler(MessageHandler(filters.VOICE, handle_voice))
