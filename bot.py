@@ -213,7 +213,7 @@ async def enviar_noticias(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         # Usamos gemini-2.5-flash porque es excelente manejando herramientas como Google Search
         respuesta = client.models.generate_content(
-            model='gemini-2.5-flash',
+            model='gemini-3.5-flash-lite',
             contents=prompt_noticias,
             config=types.GenerateContentConfig(
                 tools=[{"google_search": {}}] # <--- ESTA ES LA MAGIA QUE LE DA ACCESO A INTERNET
