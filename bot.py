@@ -85,26 +85,47 @@ user_states = {}
 user_sessions_gemini = {} # Solo para sesiones activas de Gemini
 
 # --- PROMPTS ---
-PROMPT_ENSENANZA="""Eres Lexy mi tutora nativa de chino mandarín... [Mantén tu prompt original aquí]"""
-PROMPT_EVALUACION = """Eres Lexy, actua como mi profesora... [Mantén tu prompt original aquí]"""
+PROMPT_ENSENANZA="""Eres Lexy mi tutora nativa de chino mandarín y compañera de estudio. Mi objetivo es aprender caracteres de forma práctica y natural. 
+REGLA VITAL: NO inicies la lección ni sugieras palabras por tu cuenta. ESPERA siempre a que yo te envíe la palabra o el carácter que quiero estudiar.
+Una vez que yo te envíe la palabra, seguiremos este método estructurado:
+1. Análisis del Carácter: Explica brevemente el significado del carácter, su componente visual o radical, y su lógica básica.
+2. Regla de Tres (Usos Clave): Muestra entre 2 y 3 palabras compuestas o estructuras hipercomunes en las que este carácter sea protagonista en la vida diaria. Incluye caracteres, Pinyin y traducción.
+3. El Reto de Chat (Práctica Activa): Plantéame un escenario cotidiano real y pídeme que redacte una frase corta usando la palabra nueva combinada con lo que ya sé. Dame pistas claras para guiar mi respuesta.
+4. Feedback: Cuando yo responda al reto, valida mi frase. Si cometo un error sutil de gramática o naturalidad, corrígelo de forma directa y amable, explicando el porqué, y muestra cómo lo diría un nativo.
+5. El Contador del Bloque: Mantén un registro visual al final de cada respuesta. Vamos a agrupar las palabras de 5 en 5. Cuando completemos un bloque de 5 palabras, detén el avance y hazme un examen/repaso general usando todas las palabras de ese bloque en un diálogo integrado.
+"""
+
+PROMPT_EVALUACION = """Eres Lexy, actua como mi profesora de chino mandarín nativo. 
+Voy a escribir oraciones creadas por mí. No las traduzcas directamente. Evalúa si la gramática es correcta y si suena natural para un nativo. 
+Si hay errores, corrígelos, muéstrame el Pinyin y explícame la regla gramatical en español de forma simple.
+"""
 
 PROMPT_DIALOGO_BASE = """Eres Lexy mi compañera de intercambio de idiomas nativa de China. 
-Hablar contigo me sirve para practicar vocabulario HSK1 y HSK2. Se proactiva.
+Hablar contigo me sirve para aprender practicar vocabulario del nivel HSK1 3.0 y HSK2 3.0 inicial. Se proactiva y busca enseñarme palabras nuevas de forma natural.
+Uso para estudiar Hello Chinese, asi que puedes buscar temas de conversación relacionados con la vida diaria, comida, cultura, viajes, gustos, etc.
 Palabras a practicar hoy: {palabras_objetivo}.
-Evalúa en mi respuesta si la gramática es correcta y suena natural. Si hay errores corrígelos amablemente.
-REGLA DE FORMATO ESTRICTA: Tu respuesta debe tener SIEMPRE esta estructura exacta separada por saltos de línea:
-<tts>Respuesta en caracteres chinos</tts>
+Evalúa en mi respuesta si la gramática es correcta y si suena natural para un nativo. Si hay errores corrígelos de forma directa y explícame cómo lo diría un nativo.
+
+REGLA DE FORMATO ESTRICTA Y OBLIGATORIA: 
+Tu respuesta debe tener SIEMPRE esta estructura exacta separada por saltos de línea (nunca añadas introducciones antes):
+<tts>Respuesta en caracteres chinos (solo caracteres y puntuación)</tts>
 Respuesta en Pinyin
-Traducción al español"""
+Traducción al español
+"""
 
-PROMPT_EXAMEN_HSK = """Eres un examinador de HSK. Realiza preguntas de lectura y gramática (opción múltiple o rellenar espacios). Haz UNA sola pregunta a la vez, espera mi respuesta, corrígela y haz la siguiente. NO uses <tts>."""
+PROMPT_EXAMEN_HSK = """Eres un examinador oficial de las pruebas HSK. Mi meta es certificarme en HSK 3.
+Estamos en una simulación de examen oficial (Mock Test). Revisa el historial para NO repetir preguntas que ya me hayas hecho.
+Realiza preguntas de lectura y gramática (opción múltiple o rellenar espacios en blanco). 
+Haz UNA sola pregunta a la vez, espera mi respuesta, corrígela y haz la siguiente. NO uses etiquetas <tts>.
+"""
 
-PROMPT_EXAMEN_HSKK = """Eres un examinador del test oral HSKK. Mi meta es certificarme. 
+PROMPT_EXAMEN_HSKK = """Eres un examinador oficial del test oral HSKK. Mi meta es certificarme. 
 Tienes 3 etapas. Alterna entre ellas. Haz UNA SOLA actividad a la vez y evalúa mi pronunciación.
 1. REPETIR AUDIO: Envíame la etiqueta <hskk_audio>frase en caracteres chinos</hskk_audio>.
-2. LEER TEXTO: Envíame un texto y exígeme que lo lea en voz alta.
+2. LEER TEXTO: Envíame un texto (solo en caracteres chinos) y exígeme que lo lea en voz alta.
 3. DESCRIBIR IMAGEN: Envíame la etiqueta <hskk_img>Una descripción de 3 palabras en inglés de un escenario común, ej: cat eating fish</hskk_img> y pídeme que te describa la imagen que me acabas de enviar en voz alta.
-IMPORTANTE: Evalúa mis respuestas auditivas comparando mi pronunciación con el texto correcto."""
+IMPORTANTE: Evalúa mis respuestas auditivas (Mensaje de Voz HSKK) comparando mi pronunciación con el texto correcto o evaluando si la descripción de la imagen es coherente.
+"""
 
 # --- COMANDOS ---
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -116,8 +137,30 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "Usa /amiga para modo conversación libre (Qwen 72B)\n"
         "Usa /noticias para leer actualidad en HSK 2 (Gemini+Qwen)\n"
         "Usa /examen para simular prueba HSK/HSKK\n"
+        "Usa /reiniciar para borrar el historial de la conversación\n"
     )
     await update.message.reply_text(mensaje)
+
+async def reiniciar_historial(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    chat_id = update.effective_chat.id
+    user_id = update.effective_user.id
+    
+    # 1. Borrar el historial de la base de datos para este chat
+    conn = sqlite3.connect(DB_FILE)
+    cursor = conn.cursor()
+    cursor.execute("DELETE FROM historial WHERE chat_id = ?", (chat_id,))
+    conn.commit()
+    conn.close()
+    
+    # 2. Limpiar las sesiones de Gemini en memoria
+    if user_id in user_sessions_gemini:
+        del user_sessions_gemini[user_id]
+        
+    # 3. Restablecer el estado del usuario al por defecto
+    if user_id in user_states:
+        user_states[user_id] = 'dialogo'
+        
+    await update.message.reply_text("🧹 <b>¡Historial borrado!</b>\n\nHe limpiado mi memoria de nuestra conversación anterior. ¿De qué quieres que hablemos ahora?", parse_mode='HTML')
 
 async def set_modo_ensenanza(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
@@ -189,7 +232,6 @@ async def process_interaction(update: Update, context: ContextTypes.DEFAULT_TYPE
     chat_id = update.effective_chat.id
     current_mode = user_states.get(user_id, 'dialogo')
     
-    # Manejo de selección de examen
     if current_mode == 'esperando_examen':
         eleccion = texto_original.strip().upper()
         if eleccion == 'HSK':
@@ -212,39 +254,43 @@ async def process_interaction(update: Update, context: ContextTypes.DEFAULT_TYPE
     texto_salida = ""
 
     try:
-        # Pre-procesamiento de AUDIO para modelos de TEXTO (Qwen)
+        # 1. Recuperar el historial ANTES de registrar el mensaje actual para evitar el "efecto loro"
+        historial_or = recuperar_historial(chat_id, formato='openai')
+        
+        # 2. Pre-procesamiento de AUDIO
         if is_audio:
             if current_mode in ['dialogo', 'examen_hsk']:
-                # Transcribir con Gemini antes de dárselo a Qwen
                 resp_trans = client_gemini.models.generate_content(
                     model='gemini-3.5-flash-lite',
-                    contents=[input_data, "Transcribe este audio a chino. Devuelve SOLO el texto, nada más."]
+                    contents=[input_data, "Transcribe este audio. Devuelve SOLO el texto transcrito en chino, sin explicaciones ni comillas."]
                 )
-                instruccion = resp_trans.text
-                registrar_interaccion(chat_id, "user", f"[Audio transcrito]: {instruccion}")
+                instruccion = resp_trans.text.strip()
             else:
                 instruccion = [input_data, "Evalúa la pronunciación y responde al reto."]
-                registrar_interaccion(chat_id, "user", "[Mensaje de Voz HSKK]")
         else:
             instruccion = input_data
-            registrar_interaccion(chat_id, "user", texto_original)
+
+        # 3. Registrar el mensaje del usuario (una vez procesado el audio si lo hubiera)
+        texto_a_guardar = instruccion if isinstance(instruccion, str) else "[Mensaje de Voz HSKK]"
+        registrar_interaccion(chat_id, "user", texto_a_guardar)
 
         # --- RUTADO HACIA EL MODELO CORRECTO ---
         if current_mode in ['ensenanza', 'evaluacion', 'examen_hskk']:
-            # Usar GEMINI
             if user_id not in user_sessions_gemini:
                  user_sessions_gemini[user_id] = client_gemini.chats.create(model='gemini-3.5-flash-lite')
             respuesta = user_sessions_gemini[user_id].send_message(instruccion)
             texto_salida = respuesta.text
 
         elif current_mode in ['dialogo', 'examen_hsk']:
-            # Usar QWEN 72B (OpenRouter)
-            historial_or = recuperar_historial(chat_id, formato='openai')
-            
             prompt_sis = PROMPT_EXAMEN_HSK if current_mode == 'examen_hsk' else PROMPT_DIALOGO_BASE.format(palabras_objetivo=", ".join(obtener_palabras_recientes(5)))
-            
             mensajes_qwen = [{"role": "system", "content": prompt_sis}] + historial_or
-            mensajes_qwen.append({"role": "user", "content": instruccion if isinstance(instruccion, str) else texto_original})
+            
+            # INYECCIÓN DE RECORDATORIO: Forzamos el formato en el último mensaje para que Qwen no lo olvide
+            mensaje_final = instruccion
+            if current_mode == 'dialogo':
+                mensaje_final = f"{instruccion}\n\n(Regla obligatoria: Responde usando estrictamente el formato de 3 líneas empezando con <tts>Caracteres chinos</tts>)"
+            
+            mensajes_qwen.append({"role": "user", "content": mensaje_final})
 
             completion = await client_qwen.chat.completions.create(
                 model="qwen/qwen-2.5-72b-instruct:free",
@@ -258,7 +304,7 @@ async def process_interaction(update: Update, context: ContextTypes.DEFAULT_TYPE
             
         registrar_interaccion(chat_id, "model", texto_salida)
 
-        # --- POST-PROCESAMIENTO HSKK (Imágenes y Audios dinámicos) ---
+        # --- POST-PROCESAMIENTO HSKK (Imágenes y Audios) ---
         match_hskk_img = re.search(r'<hskk_img>(.*?)</hskk_img>', texto_salida)
         if match_hskk_img:
             prompt_img = match_hskk_img.group(1).replace(" ", "%20")
@@ -272,12 +318,17 @@ async def process_interaction(update: Update, context: ContextTypes.DEFAULT_TYPE
             texto_para_audio = match_hskk_audio.group(1)
             texto_salida = re.sub(r'<hskk_audio>.*?</hskk_audio>', '', texto_salida)
 
-        # --- GENERACIÓN DE AUDIO ESTÁNDAR (<tts>) o HSKK ---
+        # --- GENERACIÓN DE AUDIO ESTÁNDAR Y FALLBACK ---
         matches_tts = re.findall(r'<tts>(.*?)</tts>', texto_salida, re.DOTALL)
         if matches_tts and not texto_para_audio:
              texto_para_audio = " ".join(matches_tts)
         elif current_mode == 'dialogo' and not texto_para_audio:
-             texto_para_audio = texto_salida
+             # SALVAVIDAS: Si el modelo desobedece y olvida el <tts>, extraemos solo los caracteres chinos
+             caracteres_chinos = re.findall(r'[\u4e00-\u9fa5，。！？、]+', texto_salida)
+             if caracteres_chinos:
+                 texto_para_audio = "".join(caracteres_chinos)
+             else:
+                 texto_para_audio = None
 
         if texto_para_audio:
             await context.bot.send_chat_action(chat_id=chat_id, action='record_voice')
@@ -335,20 +386,25 @@ async def configurar_menu(application: Application):
         BotCommand("amiga", "🗣️ Conversación (Qwen 72B)"),
         BotCommand("noticias", "📰 Noticias (Gemini+Qwen)"),
         BotCommand("examen", "📝 Examen HSK/HSKK"),
+        BotCommand("reiniciar", "🧹 Borrar memoria"),
         BotCommand("start", "🔄 Inicio")
     ])
 
 def main():
     init_db()
     app = Application.builder().token(TELEGRAM_TOKEN).post_init(configurar_menu).build()  
+    
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("profesora", set_modo_ensenanza))
     app.add_handler(CommandHandler("evaluar", set_modo_evaluacion))
     app.add_handler(CommandHandler("amiga", set_modo_dialogo))
     app.add_handler(CommandHandler("noticias", enviar_noticias))
     app.add_handler(CommandHandler("examen", set_modo_examen))
+    app.add_handler(CommandHandler("reiniciar", reiniciar_historial)) 
+    
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
     app.add_handler(MessageHandler(filters.VOICE, handle_voice))
+    
     print("Lexy (Multi-Model) Trabajando...")
     app.run_polling()
 
