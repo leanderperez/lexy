@@ -1,0 +1,111 @@
+Nombre: Universidad de Ciencia y Tecnología de Zhejiang - ZUST
+Distrito: Hangzhou, Provincia de Zhejiang
+Ranking: ~#120-150 en China (Best Chinese Universities / ARWU)
+Becas: Beca de la Provincia de Zhejiang / Beca CSC / Beca de Excelencia ZUST
+Campus: Bosques y lagos (Campus Xiaoheshan rodeado de colinas y parques)
+web: http://www.zust.edu.cn/
+
+Nombre: Universidad Normal de Zhejiang - ZJNU  
+Distrito: Jinhua, Provincia de Zhejiang (a 45 min de Hangzhou en tren de alta velocidad)
+Ranking: ~#50-70 en China | #360 global (U.S. News)
+Becas: Beca CSC, Beca del Instituto Confucio (CLEC) y Beca Presidencial propia para idiomas
+Campus: Bosques y lagos (Jardín botánico interno y lago central)
+web: https://www.zjnu.edu.cn/
+
+Nombre: Universidad de Ningbo - NBU  
+Distrito: Ningbo, Provincia de Zhejiang (a 1 h de Hangzhou y 2 h de Shanghái)
+Ranking: ~#75-90 en China | #401-500 global (Shanghai Ranking)
+Becas: Beca del gobierno municipal de Ningbo / Beca CSC / Beca CLEC
+Campus: Canales de agua y parques, campus universitario costero de estilo moderno
+web: https://www.nbu.edu.cn/en
+
+Nombre: Universidad de Hebei - HBU  
+Distrito: Baoding, Provincia de Hebei (a 40 min de Beijing en tren de alta velocidad)
+Ranking: ~#100-120 en China | #501-600 global (Shanghai Ranking)
+Becas: Beca del Instituto Confucio (CLEC) y Beca del Gobierno de Hebei
+Campus: Combinación de campus clásico de ladrillo rojo y campus nuevo con grandes lagos y zonas arboladas
+web: https://www.hbu.edu.cn/
+
+Nombre: Universidad de Yanshan - YSU
+Distrito: Qinhuangdao, Provincia de Hebei (a 1.5 h de Beijing en tren de alta velocidad)
+Ranking: ~#80-100 en China | #501-600 global (Shanghai Ranking)
+Becas: Becas completas CSC de idioma y Becas locales Tipo B / Provincial de Hebei
+Campus: Extenso campus arbolado y rodeado de parques a pocos minutos de las playas del Mar de Bohai
+web: https://english.ysu.edu.cn/
+
+Nombre: Universidad de Qingdao - QU  
+Distrito: Qingdao, Provincia de Shandong
+Ranking: ~#65-80 en China | #401-500 global (Shanghai Ranking)
+Becas: Becas de Idioma del Gobierno de Shandong / Beca CLEC / Beca CSC
+Campus: Campus principal (Fushan) situado entre montañas verdes y con vista directa a la costa y playas
+web: https://www.qdu.edu.cn/
+
+Nombre: Universidad de Chengdu - CDU
+Distrito: Chengdu, Provincia de Sichuan (a 1.5 h de Chongqing)
+Ranking: ~#160-200 en China | #633 global (U.S. News)
+Becas: Beca de la Ciudad Hermana de Chengdu / Beca CSC / Beca del Gobierno de Sichuan
+Campus: Sede oficial de las Olimpiadas Universitarias 2023; un campus ultramoderno con lago propio y parques
+web: https://www.cdu.edu.cn/
+
+Nombre: Universidad Normal de Sichuan - SICNU
+Distrito: Chengdu, Provincia de Sichuan
+Ranking: ~#120-140 en China
+Becas: Beca de la Ruta de la Seda (CSC) / Beca CLEC / Beca Provincial de Sichuan
+Campus: Campus estilo clásico rodeado de colinas, bambuzales y vegetación tradicional del suroeste de China
+web: https://www.sicnu.edu.cn/
+
+Nombre: Universidad Normal de Guangxi - GXNU
+Distrito: Guilin, Provincia/Región de Guangxi (a 2.5 h de Guangzhou)
+Ranking: ~#130-150 en China
+Becas: Beca del Gobierno de Guangxi para estudiantes internacionales, Beca CLEC y Beca CSC
+Campus: Campus de Yanshan y Wangcheng integrados en jardines históricos de la Dinastía Ming con fondo de montañas kársticas
+web: https://www.gxnu.edu.cn/
+
+Nombre: Universidad de Hainan - HAINU
+Distrito: Haikou, Provincia de Hainan (Isla de Hainan)
+Ranking: ~#100-115 en China
+Becas: Beca del Gobierno de Hainan / Beca CSC / Beca CLEC
+Campus: Estilo tropical costero, rodeado de palmeras, lagos interiores y clima de playa constante
+web: https://www.hainanu.edu.cn/
+
+Nombre: Universidad de Guilin de Tecnología - GUT
+Distrito: Guilin, Provincia de Guangxi (a 2.5 h de Guangzhou en tren de alta velocidad)
+Ranking: ~#180-220 en China
+Becas: Beca CLEC / Beca del Gobierno de Guangxi / Beca de la Universidad de Guilin
+Campus: Campus rodeado de picos kársticos y vegetación tropical en una de las zonas de mayor atractivo natural de China
+web: https://www.glut.edu.cn/
+
+Nombre: Universidad Normal de Jiangsu - JSNU
+Distrito: Xuzhou, Provincia de Jiangsu (a 1 h de Nankín y 2.5 h de Shanghái en tren de alta velocidad)
+Ranking: ~#120-140 en China
+Becas: Beca del Instituto Confucio (CLEC) / Beca del Gobierno de Jiangsu (Jasmine)
+Campus: Campus clásico estilo Jiangnan con grandes lagos internos, puentes de piedra y extensas áreas verdes
+web: https://www.jsnu.edu.cn/
+
+Nombre: Universidad de Yangzhou - YZU
+Distrito: Yangzhou, Provincia de Jiangsu (a 40 min de Nankín y 1.5 h de Shanghái en tren de alta velocidad)
+Ranking: ~#65-75 en China | #401-500 global (Shanghai Ranking)
+Becas: Beca CLEC / Beca Provincial Jasmine de Jiangsu / Beca CSC
+Campus: Integrado a la histórica ciudad de Yangzhou, a minutos del Slender West Lake, con arquitectura tradicional, canales y senderos arbolados
+web: https://www.yzu.edu.cn/
+
+Nombre: Universidad de Shantou - STU
+Distrito: Shantou, Provincia de Guangdong (a 2 h de Shenzhen y Guangzhou en tren de alta velocidad)
+Ranking: ~#130-150 en China | #601-800 global (THE)
+Becas: Beca CLEC / Beca CSC / Beca de la Fundación Li Ka-shing
+Campus: Diseño arquitectónico ultramoderno respaldado internacionalmente, rodeado de colinas, zonas verdes costeras y una de las bibliotecas más reconocidas de Asia
+web: https://www.stu.edu.cn/
+
+Nombre: Universidad Normal de Anhui - AHNU
+Distrito: Wuhu, Provincia de Anhui (a 45 min de Nankín y 40 min de Hefei en tren de alta velocidad)
+Ranking: ~#110-130 en China
+Becas: Beca del Instituto Confucio (CLEC) / Beca CSC / Beca del Gobierno de Anhui
+Campus: Situado junto al río Yangtze, combina la arquitectura regional estilo Hui (muros blancos y tejados oscuros) con parques y entornos de humedales
+web: https://www.ahnu.edu.cn/
+
+Nombre: Universidad de Sanxia (China Three Gorges University) - CTGU
+Distrito: Yichang, Provincia de Hubei (a 1.5 h de Wuhan en tren de alta velocidad)
+Ranking: ~#150-170 en China
+Becas: Beca CLEC / Beca CSC / Beca del Gobierno de Hubei
+Campus: Construido en zonas montañosas cerca de la presa de las Tres Gargantas, con valles, cascadas naturales e instalaciones integradas en la naturaleza
+web: https://www.ctgu.edu.cn/

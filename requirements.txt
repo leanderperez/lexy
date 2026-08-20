@@ -2,3 +2,4 @@ python-telegram-bot
 google-generativeai 
 edge-tts
 python-dotenv
+openai
