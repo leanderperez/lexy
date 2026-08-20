@@ -202,7 +202,7 @@ async def enviar_noticias(update: Update, context: ContextTypes.DEFAULT_TYPE):
         prompt_qwen_noticias = f"Eres un experto en chino. Resume estas noticias reales usando EXCLUSIVAMENTE vocabulario HSK 1 y 2. Usa el formato estricto: <tts>Caracteres</tts> \n Pinyin \n Español. Noticias:\n{noticias_crudas}"
         
         completion = await client_qwen.chat.completions.create(
-            model="meta-llama/llama-3.3-70b-instruct:free",
+            model="qwen/qwen-2.5-7b-instruct:free",
             messages=[{"role": "user", "content": prompt_qwen_noticias}]
         )
         texto_salida = completion.choices[0].message.content
@@ -293,7 +293,7 @@ async def process_interaction(update: Update, context: ContextTypes.DEFAULT_TYPE
             mensajes_qwen.append({"role": "user", "content": mensaje_final})
 
             completion = await client_qwen.chat.completions.create(
-                model="meta-llama/llama-3.3-70b-instruct:free",
+                model="qwen/qwen-2.5-7b-instruct:free",
                 messages=mensajes_qwen
             )
             texto_salida = completion.choices[0].message.content
