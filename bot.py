@@ -119,12 +119,14 @@ Tienes 3 etapas. Alterna entre ellas. Haz UNA SOLA actividad a la vez y evalúa 
 IMPORTANTE: Evalúa mis respuestas auditivas (Mensaje de Voz HSKK) comparando mi pronunciación con el texto correcto o evaluando si la descripción de la imagen es coherente.
 """
 
-PROMPT_NOTICIAS = """Busca en internet las 2 noticias más importantes de HOY en China usando tus herramientas.
-Eres un experto en chino. Resume estas noticias reales usando EXCLUSIVAMENTE vocabulario HSK 1 y 2.
+PROMPT_NOTICIAS = """Busca en Google ÚNICAMENTE los titulares de las 2 noticias más importantes de HOY en China. 
+REGLA DE AHORRO DE TOKENS: NO abras ni analices artículos completos. Limítate a leer los resúmenes cortos (snippets) de la página de resultados de búsqueda.
+Adapta esos 2 titulares para un estudiante de chino, usando EXCLUSIVAMENTE vocabulario muy básico (HSK 1 y 2).
+
 Usa el formato estricto (separa cada noticia por saltos de línea):
-<tts>Caracteres chinos de la noticia</tts>
+<tts>Caracteres chinos del titular</tts>
 Pinyin
-Español"""
+Traducción al español"""
 
 # --- COMANDOS ---
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -193,14 +195,17 @@ async def set_modo_examen(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def enviar_noticias(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
     await context.bot.send_chat_action(chat_id=chat_id, action='typing')
-    await update.message.reply_text("📰 Buscando noticias con Gemini...")
+    await update.message.reply_text("📰 Buscando titulares de China (modo ahorro de tokens)...")
 
     try:
-        # Gemini hace la búsqueda y resume en HSK2 todo en un solo paso
+        # Petición a Gemini con búsqueda integrada (una sola llamada)
         resp_busqueda = client_gemini.models.generate_content(
             model='gemini-3.5-flash-lite',
             contents=PROMPT_NOTICIAS,
-            config=types.GenerateContentConfig(tools=[{"google_search": {}}])
+            config=types.GenerateContentConfig(
+                tools=[{"google_search": {}}],
+                temperature=0.3 # Temperatura baja para que sea directo y no divague
+            )
         )
         texto_salida = resp_busqueda.text
         registrar_interaccion(chat_id, "model", texto_salida)
@@ -211,17 +216,23 @@ async def enviar_noticias(update: Update, context: ContextTypes.DEFAULT_TYPE):
         matches = re.findall(r'<tts>(.*?)</tts>', texto_salida, re.DOTALL)
         texto_para_audio = " ".join(matches).replace('*', '').strip() if matches else texto_salida.replace('*', '')
         
-        tts = edge_tts.Communicate(texto_para_audio, voice="zh-CN-XiaoxiaoNeural", rate="-25%")
-        await tts.save(output_audio_path)
-        with open(output_audio_path, "rb") as audio:
-            await context.bot.send_voice(chat_id=chat_id, voice=audio)
-        os.remove(output_audio_path)
+        if texto_para_audio:
+            tts = edge_tts.Communicate(texto_para_audio, voice="zh-CN-XiaoxiaoNeural", rate="-25%")
+            await tts.save(output_audio_path)
+            with open(output_audio_path, "rb") as audio:
+                await context.bot.send_voice(chat_id=chat_id, voice=audio)
+            os.remove(output_audio_path)
 
+        # Limpiar texto para Telegram
         texto_seguro = html.escape(texto_salida.replace('<tts>', '').replace('</tts>', '').strip())
         await context.bot.send_message(chat_id=chat_id, text=texto_seguro, parse_mode='HTML')
 
     except Exception as e:
-        await update.message.reply_text(f"Hubo un error con las noticias: {str(e)}")
+        error_msg = str(e)
+        if "429" in error_msg or "RESOURCE_EXHAUSTED" in error_msg:
+             await update.message.reply_text("⏳ <b>Límite alcanzado:</b> Google está procesando mucha información ahora mismo y hemos chocado con el límite de tokens gratuito por minuto. Por favor, espera unos 60 segundos y vuelve a intentarlo.", parse_mode='HTML')
+        else:
+             await update.message.reply_text(f"Hubo un error con las noticias: {error_msg}")
 
 # --- PROCESAMIENTO CENTRAL ---
 async def process_interaction(update: Update, context: ContextTypes.DEFAULT_TYPE, input_data, is_audio=False, texto_original=""):
