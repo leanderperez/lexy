@@ -18,13 +18,18 @@ load_dotenv()
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
+HF_TOKEN = os.getenv("HF_TOKEN")
 
-if not all([GEMINI_API_KEY, TELEGRAM_TOKEN, OPENROUTER_API_KEY]):
+if not all([GEMINI_API_KEY, TELEGRAM_TOKEN, OPENROUTER_API_KEY, HF_TOKEN]):
     raise ValueError("ERROR: Faltan API Keys en el archivo .env (Gemini, Telegram u OpenRouter).")
 
 # Clientes de IA
 client_gemini = genai.Client(api_key=GEMINI_API_KEY)
-client_qwen = AsyncOpenAI(base_url="https://openrouter.ai/api/v1", api_key=OPENROUTER_API_KEY)
+# Conectamos a la API Serverless gratuita de Hugging Face
+client_qwen = AsyncOpenAI(
+    base_url="https://api-inference.huggingface.co/v1/", 
+    api_key=HF_TOKEN
+)
 
 # --- CONFIGURACIÓN DE BASE DE DATOS ---
 DB_FILE = 'vocabulario.db'
@@ -202,7 +207,7 @@ async def enviar_noticias(update: Update, context: ContextTypes.DEFAULT_TYPE):
         prompt_qwen_noticias = f"Eres un experto en chino. Resume estas noticias reales usando EXCLUSIVAMENTE vocabulario HSK 1 y 2. Usa el formato estricto: <tts>Caracteres</tts> \n Pinyin \n Español. Noticias:\n{noticias_crudas}"
         
         completion = await client_qwen.chat.completions.create(
-            model="z-ai/glm-5.2:free",
+            model="Qwen/Qwen2.5-72B-Instruct",
             messages=[{"role": "user", "content": prompt_qwen_noticias}]
         )
         texto_salida = completion.choices[0].message.content
@@ -293,7 +298,7 @@ async def process_interaction(update: Update, context: ContextTypes.DEFAULT_TYPE
             mensajes_qwen.append({"role": "user", "content": mensaje_final})
 
             completion = await client_qwen.chat.completions.create(
-                model="z-ai/glm-5.2:free",
+                model="Qwen/Qwen2.5-72B-Instruct",
                 messages=mensajes_qwen
             )
             texto_salida = completion.choices[0].message.content
@@ -376,7 +381,6 @@ async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
     audio_part = client_gemini.files.upload(file=input_audio_path, config={'mime_type': 'audio/ogg'})
     await process_interaction(update, context, audio_part, is_audio=True)
     
-    client_gemini.files.delete(name=audio_part.name)
     os.remove(input_audio_path)
 
 async def configurar_menu(application: Application):
