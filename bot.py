@@ -3,6 +3,8 @@ import sqlite3
 import asyncio
 import re
 import html
+import urllib.request
+import xml.etree.ElementTree as ET
 from datetime import datetime, time
 from dotenv import load_dotenv
 from telegram import Update, BotCommand
@@ -93,9 +95,13 @@ Si hay errores, corrígelos, muéstrame el Pinyin y explícame la regla gramatic
 """
 
 PROMPT_DIALOGO_BASE = """Eres Lexy mi compañera de intercambio de idiomas nativa de China. 
-Hablar contigo me sirve para aprender y practicar vocabulario del nivel HSK1 3.0 y HSK2 3.0 inicial. Sé proactiva y busca enseñarme palabras nuevas de forma natural.
+Hablar contigo me sirve para aprender y practicar vocabulario del nivel HSK1 3.0 y HSK2 3.0 inicial. Mantén una conversación fluida, casual y natural.
 Uso para estudiar Hello Chinese, asi que puedes buscar temas de conversación relacionados con la vida diaria, comida, cultura, viajes, gustos, etc.
-Palabras a practicar hoy: {palabras_objetivo}.
+
+INFORMACIÓN DE CONTEXTO (OPCIONAL):
+Recientemente he estudiado estas palabras: {palabras_objetivo}.
+REGLA PSICOLÓGICA VITAL: Trata estas palabras SOLO como referencia. NO fuerces su uso si no encajan en el tema actual. La prioridad absoluta es que la charla sea 100% natural. Si no surge la oportunidad de usarlas, simplemente ignóralas y deja que yo las use cuando quiera.
+
 Evalúa en mi respuesta si la gramática es correcta y si suena natural para un nativo. Si hay errores corrígelos de forma directa y explícame cómo lo diría un nativo.
 
 REGLA DE FORMATO ESTRICTA Y OBLIGATORIA: 
@@ -105,28 +111,19 @@ Respuesta en Pinyin
 Traducción al español
 """
 
-PROMPT_EXAMEN_HSK = """Eres un examinador oficial de las pruebas HSK. Mi meta es certificarme en HSK 3.
+PROMPT_EXAMEN_HSK = """Eres un examinador oficial de las pruebas HSK. Mi meta es certificarme en HSK {nivel}.
 Estamos en una simulación de examen oficial (Mock Test). Revisa el historial para NO repetir preguntas que ya me hayas hecho.
-Realiza preguntas de lectura y gramática (opción múltiple o rellenar espacios en blanco). 
+Realiza preguntas de lectura y gramática acordes EXCLUSIVAMENTE al nivel HSK {nivel} (opción múltiple o rellenar espacios en blanco). 
 Haz UNA sola pregunta a la vez, espera mi respuesta, corrígela y haz la siguiente. NO uses etiquetas <tts>.
 """
 
-PROMPT_EXAMEN_HSKK = """Eres un examinador oficial del test oral HSKK. Mi meta es certificarme. 
+PROMPT_EXAMEN_HSKK = """Eres un examinador oficial del test oral HSKK (Nivel {nivel}). Mi meta es certificarme. 
 Tienes 3 etapas. Alterna entre ellas. Haz UNA SOLA actividad a la vez y evalúa mi pronunciación.
 1. REPETIR AUDIO: Envíame la etiqueta <hskk_audio>frase en caracteres chinos</hskk_audio>.
 2. LEER TEXTO: Envíame un texto (solo en caracteres chinos) y exígeme que lo lea en voz alta.
 3. DESCRIBIR IMAGEN: Envíame la etiqueta <hskk_img>Una descripción de 3 palabras en inglés de un escenario común, ej: cat eating fish</hskk_img> y pídeme que te describa la imagen que me acabas de enviar en voz alta.
-IMPORTANTE: Evalúa mis respuestas auditivas (Mensaje de Voz HSKK) comparando mi pronunciación con el texto correcto o evaluando si la descripción de la imagen es coherente.
+IMPORTANTE: Evalúa mis respuestas auditivas (Mensaje de Voz HSKK) comparando mi pronunciación con el texto correcto o evaluando si la descripción de la imagen es coherente para el nivel {nivel}.
 """
-
-PROMPT_NOTICIAS = """Busca en Google ÚNICAMENTE los titulares de las 2 noticias más importantes de HOY en China. 
-REGLA DE AHORRO DE TOKENS: NO abras ni analices artículos completos. Limítate a leer los resúmenes cortos (snippets) de la página de resultados de búsqueda.
-Adapta esos 2 titulares para un estudiante de chino, usando EXCLUSIVAMENTE vocabulario muy básico (HSK 1 y 2).
-
-Usa el formato estricto (separa cada noticia por saltos de línea):
-<tts>Caracteres chinos del titular</tts>
-Pinyin
-Traducción al español"""
 
 # --- COMANDOS ---
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -195,17 +192,35 @@ async def set_modo_examen(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def enviar_noticias(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
     await context.bot.send_chat_action(chat_id=chat_id, action='typing')
-    await update.message.reply_text("📰 Buscando titulares de China (modo ahorro de tokens)...")
+    await update.message.reply_text("📰 Obteniendo titulares (modo bajo consumo)...")
 
     try:
-        # Petición a Gemini con búsqueda integrada (una sola llamada)
+        # 1. Obtenemos las noticias directo del RSS de Google News (Coste de tokens: 0)
+        url = "https://news.google.com/rss?hl=zh-CN&gl=CN&ceid=CN:zh-Hans"
+        req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
+        response = urllib.request.urlopen(req)
+        xml_data = response.read()
+        root = ET.fromstring(xml_data)
+        
+        titulares = []
+        for item in root.findall('.//item')[:2]:
+            titulares.append(item.find('title').text)
+            
+        texto_noticias = "\n- ".join(titulares)
+
+        # 2. Le pasamos los textos a Gemini para que los formatee
+        prompt_noticias = f"""Aquí tienes 2 titulares reales de hoy en China:
+        - {texto_noticias}
+        
+        Adapta estos titulares para un estudiante de chino, usando EXCLUSIVAMENTE vocabulario muy básico (HSK 1 y 2).
+        Usa el formato estricto (separa cada noticia por saltos de línea):
+        <tts>Caracteres chinos de la noticia</tts>
+        Pinyin
+        Traducción al español"""
+
         resp_busqueda = client_gemini.models.generate_content(
             model='gemini-3.5-flash-lite',
-            contents=PROMPT_NOTICIAS,
-            config=types.GenerateContentConfig(
-                tools=[{"google_search": {}}],
-                temperature=0.3 # Temperatura baja para que sea directo y no divague
-            )
+            contents=prompt_noticias
         )
         texto_salida = resp_busqueda.text
         registrar_interaccion(chat_id, "model", texto_salida)
@@ -223,16 +238,11 @@ async def enviar_noticias(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 await context.bot.send_voice(chat_id=chat_id, voice=audio)
             os.remove(output_audio_path)
 
-        # Limpiar texto para Telegram
         texto_seguro = html.escape(texto_salida.replace('<tts>', '').replace('</tts>', '').strip())
         await context.bot.send_message(chat_id=chat_id, text=texto_seguro, parse_mode='HTML')
 
     except Exception as e:
-        error_msg = str(e)
-        if "429" in error_msg or "RESOURCE_EXHAUSTED" in error_msg:
-             await update.message.reply_text("⏳ <b>Límite alcanzado:</b> Google está procesando mucha información ahora mismo y hemos chocado con el límite de tokens gratuito por minuto. Por favor, espera unos 60 segundos y vuelve a intentarlo.", parse_mode='HTML')
-        else:
-             await update.message.reply_text(f"Hubo un error con las noticias: {error_msg}")
+        await update.message.reply_text(f"Hubo un error procesando las noticias: {str(e)}")
 
 # --- PROCESAMIENTO CENTRAL ---
 async def process_interaction(update: Update, context: ContextTypes.DEFAULT_TYPE, input_data, is_audio=False, texto_original=""):
@@ -240,24 +250,46 @@ async def process_interaction(update: Update, context: ContextTypes.DEFAULT_TYPE
     chat_id = update.effective_chat.id
     current_mode = user_states.get(user_id, 'dialogo')
     
+    # --- RUTEO DE SUB-ESTADOS PARA EXÁMENES ---
     if current_mode == 'esperando_examen':
         eleccion = texto_original.strip().upper()
         if eleccion == 'HSK':
-            user_states[user_id] = 'examen_hsk'
-            historial = recuperar_historial(chat_id, limite=10)
-            user_sessions_gemini[user_id] = client_gemini.chats.create(model='gemini-3.5-flash-lite', history=historial, config={'system_instruction': PROMPT_EXAMEN_HSK})
-            await update.message.reply_text("Iniciando simulacro HSK...")
-            input_data = "¡Empecemos el examen HSK!"
-            current_mode = 'examen_hsk'
+            user_states[user_id] = 'esperando_nivel_hsk'
+            await update.message.reply_text("Has elegido HSK (Escrito). ¿Qué nivel deseas evaluar? Responde con *1, 2 o 3*.", parse_mode='Markdown')
         elif eleccion == 'HSKK':
-            user_states[user_id] = 'examen_hskk'
-            historial = recuperar_historial(chat_id, limite=10)
-            user_sessions_gemini[user_id] = client_gemini.chats.create(model='gemini-3.5-flash-lite', history=historial, config={'system_instruction': PROMPT_EXAMEN_HSKK})
-            await update.message.reply_text("Iniciando simulacro HSKK...")
-            input_data = "¡Empecemos el examen HSKK!"
-            current_mode = 'examen_hskk'
+            user_states[user_id] = 'esperando_nivel_hskk'
+            await update.message.reply_text("Has elegido HSKK (Oral). ¿Qué nivel deseas evaluar? Responde con *Básico* o *Intermedio*.", parse_mode='Markdown')
         else:
             await update.message.reply_text("Por favor, responde solo 'HSK' o 'HSKK'.")
+        return
+
+    if current_mode == 'esperando_nivel_hsk':
+        nivel = texto_original.strip()
+        if nivel in ['1', '2', '3']:
+            user_states[user_id] = 'examen_hsk'
+            prompt_configurado = PROMPT_EXAMEN_HSK.format(nivel=nivel)
+            historial = recuperar_historial(chat_id, limite=10)
+            user_sessions_gemini[user_id] = client_gemini.chats.create(model='gemini-3.5-flash-lite', history=historial, config={'system_instruction': prompt_configurado})
+            await update.message.reply_text(f"Iniciando simulacro HSK Nivel {nivel}...")
+            input_data = f"¡Empecemos el examen HSK nivel {nivel}!"
+            current_mode = 'examen_hsk'
+        else:
+            await update.message.reply_text("Por favor, responde solo 1, 2 o 3.")
+            return
+
+    if current_mode == 'esperando_nivel_hskk':
+        nivel = texto_original.strip().lower()
+        if nivel in ['básico', 'basico', 'intermedio']:
+            user_states[user_id] = 'examen_hskk'
+            nivel_limpio = 'Básico' if nivel in ['básico', 'basico'] else 'Intermedio'
+            prompt_configurado = PROMPT_EXAMEN_HSKK.format(nivel=nivel_limpio)
+            historial = recuperar_historial(chat_id, limite=10)
+            user_sessions_gemini[user_id] = client_gemini.chats.create(model='gemini-3.5-flash-lite', history=historial, config={'system_instruction': prompt_configurado})
+            await update.message.reply_text(f"Iniciando simulacro HSKK Nivel {nivel_limpio}...")
+            input_data = f"¡Empecemos el examen HSKK nivel {nivel_limpio}!"
+            current_mode = 'examen_hskk'
+        else:
+            await update.message.reply_text("Por favor, responde 'Básico' o 'Intermedio'.")
             return
 
     await context.bot.send_chat_action(chat_id=chat_id, action='typing')
@@ -283,7 +315,6 @@ async def process_interaction(update: Update, context: ContextTypes.DEFAULT_TYPE
 
         # Configurar sesión si no existe
         if user_id not in user_sessions_gemini:
-            # Fallback a diálogo por defecto si se perdió la sesión
             prompt_dinamico = PROMPT_DIALOGO_BASE.format(palabras_objetivo="")
             historial = recuperar_historial(chat_id, limite=10)
             user_sessions_gemini[user_id] = client_gemini.chats.create(model='gemini-3.5-flash-lite', history=historial, config={'system_instruction': prompt_dinamico})
@@ -321,7 +352,6 @@ async def process_interaction(update: Update, context: ContextTypes.DEFAULT_TYPE
         if matches_tts and not texto_para_audio:
              texto_para_audio = " ".join(matches_tts)
         elif current_mode == 'dialogo' and not texto_para_audio:
-             # SALVAVIDAS
              caracteres_chinos = re.findall(r'[\u4e00-\u9fa5，。！？、]+', texto_salida)
              if caracteres_chinos:
                  texto_para_audio = "".join(caracteres_chinos)
@@ -374,7 +404,6 @@ async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
     audio_part = client_gemini.files.upload(file=input_audio_path, config={'mime_type': 'audio/ogg'})
     await process_interaction(update, context, audio_part, is_audio=True)
     
-    # Se eliminó la función de borrado de archivos de gemini para evitar el error 403.
     os.remove(input_audio_path)
 
 async def configurar_menu(application: Application):
@@ -403,7 +432,7 @@ def main():
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
     app.add_handler(MessageHandler(filters.VOICE, handle_voice))
     
-    print("Lexy (Gemini-Only) Trabajando...")
+    print("Lexy Trabajando...")
     app.run_polling()
 
 if __name__ == "__main__":
