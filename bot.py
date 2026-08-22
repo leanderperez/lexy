@@ -9,7 +9,6 @@ from telegram import Update, BotCommand
 from telegram.ext import Application, MessageHandler, CommandHandler, filters, ContextTypes
 from google import genai
 from google.genai import types
-from openai import AsyncOpenAI
 import edge_tts
 
 # 1. Cargar el archivo .env PRIMERO
@@ -17,19 +16,12 @@ load_dotenv()
 
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
-OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
-HF_TOKEN = os.getenv("HF_TOKEN")
 
-if not all([GEMINI_API_KEY, TELEGRAM_TOKEN, OPENROUTER_API_KEY, HF_TOKEN]):
-    raise ValueError("ERROR: Faltan API Keys en el archivo .env (Gemini, Telegram u OpenRouter).")
+if not all([GEMINI_API_KEY, TELEGRAM_TOKEN]):
+    raise ValueError("ERROR: Faltan API Keys en el archivo .env (Gemini o Telegram).")
 
-# Clientes de IA
+# Cliente de IA (Solo Gemini)
 client_gemini = genai.Client(api_key=GEMINI_API_KEY)
-# Conectamos a la API Serverless gratuita de Hugging Face
-client_qwen = AsyncOpenAI(
-    base_url="https://api-inference.huggingface.co/v1/", 
-    api_key=HF_TOKEN
-)
 
 # --- CONFIGURACIÓN DE BASE DE DATOS ---
 DB_FILE = 'vocabulario.db'
@@ -68,7 +60,7 @@ def obtener_palabras_recientes(limite=5):
     conn.close()
     return palabras
 
-def recuperar_historial(chat_id, limite=20, formato='gemini'):
+def recuperar_historial(chat_id, limite=20):
     conn = sqlite3.connect(DB_FILE)
     cursor = conn.cursor()
     cursor.execute("SELECT rol, contenido FROM historial WHERE chat_id = ? ORDER BY fecha DESC LIMIT ?", (chat_id, limite))
@@ -77,17 +69,12 @@ def recuperar_historial(chat_id, limite=20, formato='gemini'):
     
     historial = []
     for rol, contenido in reversed(filas):
-        if formato == 'gemini':
-            historial.append(types.Content(role=rol, parts=[types.Part.from_text(text=contenido)]))
-        else:
-            # OpenRouter (OpenAI format) usa "user" y "assistant" (nuestro DB tiene 'user' y 'model')
-            rol_or = "assistant" if rol == "model" else "user"
-            historial.append({"role": rol_or, "content": contenido})
+        historial.append(types.Content(role=rol, parts=[types.Part.from_text(text=contenido)]))
     return historial
 
 # --- GESTIÓN DE ESTADOS Y SESIONES ---
 user_states = {}
-user_sessions_gemini = {} # Solo para sesiones activas de Gemini
+user_sessions_gemini = {}
 
 # --- PROMPTS ---
 PROMPT_ENSENANZA="""Eres Lexy mi tutora nativa de chino mandarín y compañera de estudio. Mi objetivo es aprender caracteres de forma práctica y natural. 
@@ -106,7 +93,7 @@ Si hay errores, corrígelos, muéstrame el Pinyin y explícame la regla gramatic
 """
 
 PROMPT_DIALOGO_BASE = """Eres Lexy mi compañera de intercambio de idiomas nativa de China. 
-Hablar contigo me sirve para aprender practicar vocabulario del nivel HSK1 3.0 y HSK2 3.0 inicial. Se proactiva y busca enseñarme palabras nuevas de forma natural.
+Hablar contigo me sirve para aprender y practicar vocabulario del nivel HSK1 3.0 y HSK2 3.0 inicial. Sé proactiva y busca enseñarme palabras nuevas de forma natural.
 Uso para estudiar Hello Chinese, asi que puedes buscar temas de conversación relacionados con la vida diaria, comida, cultura, viajes, gustos, etc.
 Palabras a practicar hoy: {palabras_objetivo}.
 Evalúa en mi respuesta si la gramática es correcta y si suena natural para un nativo. Si hay errores corrígelos de forma directa y explícame cómo lo diría un nativo.
@@ -132,15 +119,22 @@ Tienes 3 etapas. Alterna entre ellas. Haz UNA SOLA actividad a la vez y evalúa 
 IMPORTANTE: Evalúa mis respuestas auditivas (Mensaje de Voz HSKK) comparando mi pronunciación con el texto correcto o evaluando si la descripción de la imagen es coherente.
 """
 
+PROMPT_NOTICIAS = """Busca en internet las 2 noticias más importantes de HOY en China usando tus herramientas.
+Eres un experto en chino. Resume estas noticias reales usando EXCLUSIVAMENTE vocabulario HSK 1 y 2.
+Usa el formato estricto (separa cada noticia por saltos de línea):
+<tts>Caracteres chinos de la noticia</tts>
+Pinyin
+Español"""
+
 # --- COMANDOS ---
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
     registrar_interaccion(chat_id, "user", "/start")
     mensaje = (
-        "Usa /profesora para modo enseñanza (Gemini)\n"
-        "Usa /evaluar para evaluar oraciones (Gemini)\n"
-        "Usa /amiga para modo conversación libre (Qwen 72B)\n"
-        "Usa /noticias para leer actualidad en HSK 2 (Gemini+Qwen)\n"
+        "Usa /profesora para modo enseñanza\n"
+        "Usa /evaluar para evaluar oraciones\n"
+        "Usa /amiga para modo conversación libre\n"
+        "Usa /noticias para leer actualidad en HSK 2\n"
         "Usa /examen para simular prueba HSK/HSKK\n"
         "Usa /reiniciar para borrar el historial de la conversación\n"
     )
@@ -150,18 +144,15 @@ async def reiniciar_historial(update: Update, context: ContextTypes.DEFAULT_TYPE
     chat_id = update.effective_chat.id
     user_id = update.effective_user.id
     
-    # 1. Borrar el historial de la base de datos para este chat
     conn = sqlite3.connect(DB_FILE)
     cursor = conn.cursor()
     cursor.execute("DELETE FROM historial WHERE chat_id = ?", (chat_id,))
     conn.commit()
     conn.close()
     
-    # 2. Limpiar las sesiones de Gemini en memoria
     if user_id in user_sessions_gemini:
         del user_sessions_gemini[user_id]
         
-    # 3. Restablecer el estado del usuario al por defecto
     if user_id in user_states:
         user_states[user_id] = 'dialogo'
         
@@ -171,18 +162,28 @@ async def set_modo_ensenanza(update: Update, context: ContextTypes.DEFAULT_TYPE)
     user_id = update.effective_user.id
     user_states[user_id] = 'ensenanza'
     user_sessions_gemini[user_id] = client_gemini.chats.create(model='gemini-3.5-flash-lite', config={'system_instruction': PROMPT_ENSENANZA})
-    await update.message.reply_text("📚 Modo Enseñanza (Gemini) activado. Esperando tus palabras...")
+    await update.message.reply_text("📚 Modo Enseñanza activado. Esperando tus palabras...")
 
 async def set_modo_evaluacion(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     user_states[user_id] = 'evaluacion'
     user_sessions_gemini[user_id] = client_gemini.chats.create(model='gemini-3.5-flash-lite', config={'system_instruction': PROMPT_EVALUACION})
-    await update.message.reply_text("📝 Modo Evaluación (Gemini) activado.")
+    await update.message.reply_text("📝 Modo Evaluación activado.")
 
 async def set_modo_dialogo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
+    chat_id = update.effective_chat.id
     user_states[user_id] = 'dialogo'
-    await update.message.reply_text("🗣️ Modo Conversación (Qwen 2.5 72B) activado. ¡Hablemos!")
+    
+    prompt_dinamico = PROMPT_DIALOGO_BASE.format(palabras_objetivo=", ".join(obtener_palabras_recientes(5)))
+    historial = recuperar_historial(chat_id, limite=10)
+    
+    user_sessions_gemini[user_id] = client_gemini.chats.create(
+        model='gemini-3.5-flash-lite',
+        history=historial,
+        config={'system_instruction': prompt_dinamico}
+    )
+    await update.message.reply_text("🗣️ Modo Conversación activado. ¡Hablemos!")
 
 async def set_modo_examen(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
@@ -192,28 +193,19 @@ async def set_modo_examen(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def enviar_noticias(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
     await context.bot.send_chat_action(chat_id=chat_id, action='typing')
-    await update.message.reply_text("📰 Buscando noticias con Gemini y traduciendo con Qwen 72B...")
+    await update.message.reply_text("📰 Buscando noticias con Gemini...")
 
     try:
-        # 1. Gemini busca en internet
+        # Gemini hace la búsqueda y resume en HSK2 todo en un solo paso
         resp_busqueda = client_gemini.models.generate_content(
             model='gemini-3.5-flash-lite',
-            contents="Busca en internet las 2 noticias más importantes de HOY en China y devuélveme el texto crudo con los hechos reales.",
+            contents=PROMPT_NOTICIAS,
             config=types.GenerateContentConfig(tools=[{"google_search": {}}])
         )
-        noticias_crudas = resp_busqueda.text
-
-        # 2. Qwen resume y formatea en HSK 2
-        prompt_qwen_noticias = f"Eres un experto en chino. Resume estas noticias reales usando EXCLUSIVAMENTE vocabulario HSK 1 y 2. Usa el formato estricto: <tts>Caracteres</tts> \n Pinyin \n Español. Noticias:\n{noticias_crudas}"
-        
-        completion = await client_qwen.chat.completions.create(
-            model="Qwen/Qwen2.5-72B-Instruct",
-            messages=[{"role": "user", "content": prompt_qwen_noticias}]
-        )
-        texto_salida = completion.choices[0].message.content
+        texto_salida = resp_busqueda.text
         registrar_interaccion(chat_id, "model", texto_salida)
 
-        # 3. Audio y Envío
+        # Audio y Envío
         await context.bot.send_chat_action(chat_id=chat_id, action='record_voice')
         output_audio_path = f"news_{chat_id}.mp3"
         matches = re.findall(r'<tts>(.*?)</tts>', texto_salida, re.DOTALL)
@@ -241,14 +233,16 @@ async def process_interaction(update: Update, context: ContextTypes.DEFAULT_TYPE
         eleccion = texto_original.strip().upper()
         if eleccion == 'HSK':
             user_states[user_id] = 'examen_hsk'
-            await update.message.reply_text("Iniciando simulacro HSK con Qwen...")
+            historial = recuperar_historial(chat_id, limite=10)
+            user_sessions_gemini[user_id] = client_gemini.chats.create(model='gemini-3.5-flash-lite', history=historial, config={'system_instruction': PROMPT_EXAMEN_HSK})
+            await update.message.reply_text("Iniciando simulacro HSK...")
             input_data = "¡Empecemos el examen HSK!"
             current_mode = 'examen_hsk'
         elif eleccion == 'HSKK':
             user_states[user_id] = 'examen_hskk'
-            historial = recuperar_historial(chat_id, limite=10, formato='gemini')
+            historial = recuperar_historial(chat_id, limite=10)
             user_sessions_gemini[user_id] = client_gemini.chats.create(model='gemini-3.5-flash-lite', history=historial, config={'system_instruction': PROMPT_EXAMEN_HSKK})
-            await update.message.reply_text("Iniciando simulacro HSKK con Gemini...")
+            await update.message.reply_text("Iniciando simulacro HSKK...")
             input_data = "¡Empecemos el examen HSKK!"
             current_mode = 'examen_hskk'
         else:
@@ -259,10 +253,7 @@ async def process_interaction(update: Update, context: ContextTypes.DEFAULT_TYPE
     texto_salida = ""
 
     try:
-        # 1. Recuperar el historial ANTES de registrar el mensaje actual para evitar el "efecto loro"
-        historial_or = recuperar_historial(chat_id, formato='openai')
-        
-        # 2. Pre-procesamiento de AUDIO
+        # Pre-procesamiento de AUDIO
         if is_audio:
             if current_mode in ['dialogo', 'examen_hsk']:
                 resp_trans = client_gemini.models.generate_content(
@@ -275,33 +266,24 @@ async def process_interaction(update: Update, context: ContextTypes.DEFAULT_TYPE
         else:
             instruccion = input_data
 
-        # 3. Registrar el mensaje del usuario (una vez procesado el audio si lo hubiera)
+        # Registrar el mensaje del usuario
         texto_a_guardar = instruccion if isinstance(instruccion, str) else "[Mensaje de Voz HSKK]"
         registrar_interaccion(chat_id, "user", texto_a_guardar)
 
-        # --- RUTADO HACIA EL MODELO CORRECTO ---
-        if current_mode in ['ensenanza', 'evaluacion', 'examen_hskk']:
-            if user_id not in user_sessions_gemini:
-                 user_sessions_gemini[user_id] = client_gemini.chats.create(model='gemini-3.5-flash-lite')
-            respuesta = user_sessions_gemini[user_id].send_message(instruccion)
-            texto_salida = respuesta.text
+        # Configurar sesión si no existe
+        if user_id not in user_sessions_gemini:
+            # Fallback a diálogo por defecto si se perdió la sesión
+            prompt_dinamico = PROMPT_DIALOGO_BASE.format(palabras_objetivo="")
+            historial = recuperar_historial(chat_id, limite=10)
+            user_sessions_gemini[user_id] = client_gemini.chats.create(model='gemini-3.5-flash-lite', history=historial, config={'system_instruction': prompt_dinamico})
 
-        elif current_mode in ['dialogo', 'examen_hsk']:
-            prompt_sis = PROMPT_EXAMEN_HSK if current_mode == 'examen_hsk' else PROMPT_DIALOGO_BASE.format(palabras_objetivo=", ".join(obtener_palabras_recientes(5)))
-            mensajes_qwen = [{"role": "system", "content": prompt_sis}] + historial_or
-            
-            # INYECCIÓN DE RECORDATORIO: Forzamos el formato en el último mensaje para que Qwen no lo olvide
-            mensaje_final = instruccion
-            if current_mode == 'dialogo':
-                mensaje_final = f"{instruccion}\n\n(Regla obligatoria: Responde usando estrictamente el formato de 3 líneas empezando con <tts>Caracteres chinos</tts>)"
-            
-            mensajes_qwen.append({"role": "user", "content": mensaje_final})
+        # Inyección de recordatorio para el modo diálogo
+        if current_mode == 'dialogo' and isinstance(instruccion, str):
+             instruccion += "\n\n(Regla obligatoria: Responde usando estrictamente el formato de 3 líneas empezando con <tts>Caracteres chinos</tts>)"
 
-            completion = await client_qwen.chat.completions.create(
-                model="Qwen/Qwen2.5-72B-Instruct",
-                messages=mensajes_qwen
-            )
-            texto_salida = completion.choices[0].message.content
+        # Enviar petición a Gemini
+        respuesta = user_sessions_gemini[user_id].send_message(instruccion)
+        texto_salida = respuesta.text
 
         if not texto_salida:
             await update.message.reply_text("Corte de conexión. ¿Puedes repetirlo?")
@@ -328,7 +310,7 @@ async def process_interaction(update: Update, context: ContextTypes.DEFAULT_TYPE
         if matches_tts and not texto_para_audio:
              texto_para_audio = " ".join(matches_tts)
         elif current_mode == 'dialogo' and not texto_para_audio:
-             # SALVAVIDAS: Si el modelo desobedece y olvida el <tts>, extraemos solo los caracteres chinos
+             # SALVAVIDAS
              caracteres_chinos = re.findall(r'[\u4e00-\u9fa5，。！？、]+', texto_salida)
              if caracteres_chinos:
                  texto_para_audio = "".join(caracteres_chinos)
@@ -381,14 +363,15 @@ async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
     audio_part = client_gemini.files.upload(file=input_audio_path, config={'mime_type': 'audio/ogg'})
     await process_interaction(update, context, audio_part, is_audio=True)
     
+    # Se eliminó la función de borrado de archivos de gemini para evitar el error 403.
     os.remove(input_audio_path)
 
 async def configurar_menu(application: Application):
     await application.bot.set_my_commands([
-        BotCommand("profesora", "📚 Enseñanza (Gemini)"),
-        BotCommand("evaluar", "📝 Evaluar (Gemini)"),
-        BotCommand("amiga", "🗣️ Conversación (Qwen 72B)"),
-        BotCommand("noticias", "📰 Noticias (Gemini+Qwen)"),
+        BotCommand("profesora", "📚 Modo Enseñanza"),
+        BotCommand("evaluar", "📝 Modo Evaluar"),
+        BotCommand("amiga", "🗣️ Modo Conversación"),
+        BotCommand("noticias", "📰 Leer Noticias"),
         BotCommand("examen", "📝 Examen HSK/HSKK"),
         BotCommand("reiniciar", "🧹 Borrar memoria"),
         BotCommand("start", "🔄 Inicio")
@@ -409,7 +392,7 @@ def main():
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
     app.add_handler(MessageHandler(filters.VOICE, handle_voice))
     
-    print("Lexy (Multi-Model) Trabajando...")
+    print("Lexy (Gemini-Only) Trabajando...")
     app.run_polling()
 
 if __name__ == "__main__":
