@@ -443,7 +443,7 @@ def main():
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
     app.add_handler(MessageHandler(filters.VOICE, handle_voice))
     
-    # Programa el envío automático cada 2 horas (7200 segundos). El primero iniciará a los 10 segundos para probar que funciona.
+    # Programa el envío automático cada 2 horas (43200 segundos). El primero iniciará a los 10 segundos para probar que funciona.
     app.job_queue.run_repeating(enviar_leccion_periodica, interval=7200, first=10)
     
     print("Lexy enfocada en HSK 2 Trabajando...")
