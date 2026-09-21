@@ -1,10 +1,8 @@
 import os
 import sqlite3
-import asyncio
 import re
 import html
 import random
-from datetime import datetime, time
 from dotenv import load_dotenv
 from telegram import Update, BotCommand
 from telegram.ext import Application, MessageHandler, CommandHandler, filters, ContextTypes
@@ -24,20 +22,19 @@ if not all([GEMINI_API_KEY, TELEGRAM_TOKEN]):
 # Cliente de IA (Solo Gemini)
 client_gemini = genai.Client(api_key=GEMINI_API_KEY)
 
-# --- LISTA HSK 2 (3.0) PARA LECCIONES PROACTIVAS ---
-# Muestra representativa de vocabulario HSK 2 (3.0) para las lecciones cada 2 horas
-PALABRAS_HSK2 = [
-    "帮 (bāng - ayudar)", "比如 (bǐrú - por ejemplo)", "必须 (bìxū - deber/tener que)", 
-    "发现 (fāxiàn - descubrir/darse cuenta)", "刚才 (gāngcái - hace un momento)", 
-    "讲 (jiǎng - hablar/explicar)", "经常 (jīngcháng - a menudo)", "马上 (mǎshàng - de inmediato)", 
-    "明白 (míngbai - entender)", "认为 (rènwéi - creer/opinar)", "虽然 (suīrán - aunque)", 
-    "但是 (dànshì - pero)", "希望 (xīwàng - esperar/desear)", "需要 (xūyào - necesitar)", 
-    "一直 (yìzhí - continuamente/siempre)", "因为 (yīnwèi - porque)", "所以 (suǒyǐ - por eso)",
-    "以前 (yǐqián - antes)", "以后 (yǐhòu - después)", "准备 (zhǔnbèi - preparar)",
-    "最近 (zuìjìn - últimamente)", "懂 (dǒng - entender)", "告诉 (gàosu - decir/contar)",
-    "已经 (yǐjīng - ya)", "离 (lí - distancia desde)", "错 (cuò - error/equivocado)",
-    "事情 (shìqing - asunto/cosa)", "觉得 (juéde - sentir/pensar)", "可能 (kěnéng - tal vez)",
-    "每 (měi - cada)"
+# --- REGLAS HSK 2 OFICIALES ---
+REGLAS_HSK2 = [
+    "Experiencia Pasada (Sujeto + Verbo + 过)",
+    "Estado Continuo (Sujeto + Verbo + 着)",
+    "Acción Inminente (快要/就要...了)",
+    "Comparación (A 比 B + Adj)",
+    "Complemento de Grado (Verbo + 得 + 很/太 + Adj)",
+    "Causa y Efecto (因为...所以)",
+    "Contraste (虽然...但是)",
+    "Totalidad/Frecuencia (每...都)",
+    "Distancia (A 离 B + 很远/很近)",
+    "Prohibición (别/不要...了)",
+    "Sugerencia/Suposición (...吧)"
 ]
 
 # --- CONFIGURACIÓN DE BASE DE DATOS ---
@@ -61,6 +58,31 @@ def guardar_palabra(palabra):
         pass 
     conn.close()
 
+def eliminar_palabra(palabra):
+    conn = sqlite3.connect(DB_FILE)
+    cursor = conn.cursor()
+    cursor.execute("DELETE FROM palabras WHERE palabra = ?", (palabra,))
+    filas_borradas = cursor.rowcount
+    conn.commit()
+    conn.close()
+    return filas_borradas > 0
+
+def obtener_todas_las_palabras():
+    conn = sqlite3.connect(DB_FILE)
+    cursor = conn.cursor()
+    cursor.execute("SELECT palabra FROM palabras ORDER BY fecha DESC")
+    palabras = [fila[0] for fila in cursor.fetchall()]
+    conn.close()
+    return palabras
+
+def obtener_palabras_aleatorias(limite=3):
+    conn = sqlite3.connect(DB_FILE)
+    cursor = conn.cursor()
+    cursor.execute("SELECT palabra FROM palabras ORDER BY RANDOM() LIMIT ?", (limite,))
+    palabras = [fila[0] for fila in cursor.fetchall()]
+    conn.close()
+    return palabras
+
 def registrar_interaccion(chat_id, rol, contenido):
     conn = sqlite3.connect(DB_FILE)
     cursor = conn.cursor()
@@ -69,33 +91,17 @@ def registrar_interaccion(chat_id, rol, contenido):
     conn.commit()
     conn.close()
 
-def obtener_palabras_recientes(limite=5):
-    conn = sqlite3.connect(DB_FILE)
-    cursor = conn.cursor()
-    cursor.execute("SELECT palabra FROM palabras ORDER BY fecha DESC LIMIT ?", (limite,))
-    palabras = [fila[0] for fila in cursor.fetchall()]
-    conn.close()
-    return palabras
-
 def recuperar_historial(chat_id, limite=20):
     conn = sqlite3.connect(DB_FILE)
     cursor = conn.cursor()
     cursor.execute("SELECT rol, contenido FROM historial WHERE chat_id = ? ORDER BY fecha DESC LIMIT ?", (chat_id, limite))
     filas = cursor.fetchall()
     conn.close()
-    
+
     historial = []
     for rol, contenido in reversed(filas):
         historial.append(types.Content(role=rol, parts=[types.Part.from_text(text=contenido)]))
     return historial
-
-def obtener_todos_los_usuarios():
-    conn = sqlite3.connect(DB_FILE)
-    cursor = conn.cursor()
-    cursor.execute("SELECT chat_id FROM usuarios")
-    usuarios = [fila[0] for fila in cursor.fetchall()]
-    conn.close()
-    return usuarios
 
 # --- GESTIÓN DE ESTADOS Y SESIONES ---
 user_states = {}
@@ -104,33 +110,16 @@ user_sessions_gemini = {}
 # --- PROMPTS ---
 PROMPT_ENSENANZA="""Eres Lexy mi tutora nativa de chino mandarín. Mi objetivo actual es dominar el HSK 2 (versión 3.0). 
 REGLA VITAL: NO inicies la lección ni sugieras palabras por tu cuenta. ESPERA siempre a que yo te envíe la palabra o el carácter que quiero estudiar.
-Una vez que yo te envíe la palabra, seguiremos este método estructurado:
-1. Análisis del Carácter: Significado, componente visual o radical, y lógica básica.
-2. Regla de Tres (Usos Clave): 2 a 3 palabras compuestas o estructuras usando gramática HSK 2. Incluye caracteres, Pinyin y traducción.
-3. El Reto de Chat: Plantéame un escenario cotidiano real y pídeme redactar una frase usando la palabra nueva + gramática HSK 2.
-4. Feedback: Corrige mi frase de forma directa y amable explicando el porqué.
-5. El Contador del Bloque: Vamos a agrupar palabras de 5 en 5. Al completar un bloque, hazme un examen/repaso general.
+1. Análisis del Carácter: Significado y lógica básica.
+2. Regla de Tres (Usos Clave): 2 a 3 oraciones usando gramática HSK 2. Incluye caracteres, Pinyin y traducción.
+3. Aplicación a la vida real: Hazme una pregunta usando esa palabra para que te la responda con algo que me haya pasado hoy.
 """
 
-PROMPT_LECCION_PERIODICA = """Eres Lexy. Es momento de enviarle al estudiante su píldora de estudio programada (HSK 2 - 3.0).
-Hoy repasarás con él la siguiente palabra/concepto: {palabra_hoy}
-
-Tu mensaje debe ser directo, amigable y estructurado así:
-1. Saluda y presenta la palabra.
-2. Escribe 2 oraciones de ejemplo muy naturales usando esa palabra combinada con la gramática HSK 2.
-3. Hazle una pregunta corta para que la responda en el chat usando la palabra.
-
-REGLA DE FORMATO ESTRICTA:
-TODO el texto en caracteres chinos (ejemplos, saludos y preguntas) debe estar envuelto en una sola etiqueta <tts>...</tts> al principio de tu mensaje. 
-Debajo de la etiqueta, coloca el Pinyin y la traducción al español.
-"""
-
-PROMPT_DIALOGO_BASE = """Eres Lexy, mi compañera de intercambio de idiomas nativa de China. 
-Hablar contigo me sirve para aprender y practicar vocabulario y gramática del nivel HSK 2 (3.0). Mantén una conversación casual.
+PROMPT_DIALOGO_BASE = """Eres Lexy, mi entrenadora de conversación (HSK 2).
+Tu objetivo es preguntarme qué estoy haciendo AHORA MISMO y OBLIGARME a usar la gramática del HSK 2 para describirlo.
 
 🧠 REGLA VITAL: EL MODELO BOLA DE NIEVE
-Tu objetivo principal es forzarme a practicar la gramática del HSK 2. Si mi respuesta es muy básica, NO cambies de tema. En su lugar, hazme preguntas de seguimiento (ej. ¿cuándo?, ¿con quién?, ¿por qué?) para obligarme a expandir mi respuesta.
-Oblígame sutilmente a usar estas estructuras gramaticales en la charla:
+Usa las siguientes reglas para obligarme a expandir mis respuestas:
 1. Experiencia Pasada (Sujeto + Verbo + 过)
 2. Estado Continuo (Sujeto + Verbo + 着)
 3. Acción Inminente (快要/就要...了)
@@ -143,10 +132,6 @@ Oblígame sutilmente a usar estas estructuras gramaticales en la charla:
 10. Prohibición (别/不要...了)
 11. Sugerencia/Suposición (...吧)
 
-INFORMACIÓN DE CONTEXTO (OPCIONAL):
-Recientemente he estudiado estas palabras: {palabras_objetivo}.
-REGLA PSICOLÓGICA VITAL: Trata estas palabras SOLO como referencia. NO fuerces su uso si no encajan en el tema actual. NO cambies tu estado de ánimo ni inventes historias dramáticas para usarlas (por ejemplo, si estudié la palabra "llorar", NO actúes triste). La prioridad absoluta es que la charla sea 100% natural.
-
 REGLA DE FORMATO ESTRICTA Y OBLIGATORIA: 
 Tu respuesta debe tener SIEMPRE esta estructura exacta separada por saltos de línea (nunca añadas introducciones antes):
 <tts>Respuesta en caracteres chinos (solo caracteres y puntuación)</tts>
@@ -154,200 +139,199 @@ Respuesta en Pinyin
 Traducción al español
 """
 
-PROMPT_EXAMEN_HSK = """Eres un examinador oficial de las pruebas HSK. Mi meta es certificarme en HSK {nivel}.
-Estamos en una simulación de examen oficial (Mock Test). Revisa el historial para NO repetir preguntas que ya me hayas hecho.
-Realiza preguntas de lectura y gramática acordes EXCLUSIVAMENTE al nivel HSK {nivel} (opción múltiple o rellenar espacios en blanco). 
-Haz UNA sola pregunta a la vez, espera mi respuesta, corrígela y haz la siguiente. NO uses etiquetas <tts>.
+PROMPT_RETO_SITUACIONAL = """Eres Lexy. Es hora del "Reto de los Bloques de Lego". 
+El estudiante quiere integrar el chino a su día a día. Tu tarea es plantearle un reto de construcción de oraciones basado en su entorno actual.
+
+Te daré una lista de palabras guardadas por el estudiante y una regla gramatical obligatoria.
+Tu misión:
+1. Saluda y dale las palabras (carácter, pinyin y significado).
+2. Explícale brevemente la regla gramatical que le tocó.
+3. EXÍGELE que mire a su alrededor en este instante y construya una oración que combine obligatoriamente al menos 1 o 2 de esas palabras con la regla gramatical asignada.
+
+Si el estudiante te responde, evalúa su oración. Si suena robótica, corrígelo para que suene más natural.
 """
 
-PROMPT_EXAMEN_HSKK = """Eres un examinador oficial del test oral HSKK (Nivel {nivel}). Mi meta es certificarme. 
-Tienes 3 etapas. Alterna entre ellas. Haz UNA SOLA actividad a la vez y evalúa mi pronunciación.
-1. REPETIR AUDIO: Envíame la etiqueta <hskk_audio>frase en caracteres chinos</hskk_audio>.
-2. LEER TEXTO: Envíame un texto (solo en caracteres chinos) y exígeme que lo lea en voz alta.
-3. DESCRIBIR IMAGEN: Envíame la etiqueta <hskk_img>Una descripción de 3 palabras en inglés de un escenario común, ej: cat eating fish</hskk_img> y pídeme que te describa la imagen que me acabas de enviar en voz alta.
-IMPORTANTE: Evalúa mis respuestas auditivas (Mensaje de Voz HSKK) comparando mi pronunciación con el texto correcto o evaluando si la descripción de la imagen es coherente para el nivel {nivel}.
-"""
+PROMPT_EXAMEN_HSK = "Eres un examinador oficial HSK {nivel}. Haz UNA sola pregunta de gramática/lectura a la vez, espera mi respuesta, corrígela y haz la siguiente. NO uses etiquetas <tts>."
 
-# --- COMANDOS Y TAREAS ---
+PROMPT_EXAMEN_HSKK = "Eres un examinador oficial HSKK {nivel}. Alterna: 1. <hskk_audio>frase en chino</hskk_audio>. 2. Leer texto. 3. <hskk_img>escenario simple en inglés</hskk_img>. Evalúa mi pronunciación. Una tarea a la vez."
+
+# --- COMANDOS CRUD BASE DE DATOS ---
+async def comando_agregar(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not context.args:
+        await update.message.reply_text("⚠️ Indica las palabras a agregar. Ejemplo: `/agregar 苹果, 学习, 汽车`", parse_mode='Markdown')
+        return
+    
+    texto = " ".join(context.args)
+    palabras = [p.strip() for p in texto.split(',') if p.strip()]
+    for p in palabras:
+        guardar_palabra(p)
+    await update.message.reply_text(f"✅ Se agregaron {len(palabras)} palabras a tu base de datos:\n{', '.join(palabras)}")
+
+async def comando_lista(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    palabras = obtener_todas_las_palabras()
+    if not palabras:
+        await update.message.reply_text("📭 Tu lista de palabras está vacía.")
+        return
+    
+    mensaje = "📋 *Tu Banco de Bloques (Vocabulario):*\n\n" + ", ".join(palabras)
+    if len(mensaje) > 4000:
+        await update.message.reply_text("📋 *Tu lista es muy larga. Mostrando las últimas 100:*", parse_mode='Markdown')
+        await update.message.reply_text(", ".join(palabras[:100]))
+    else:
+        await update.message.reply_text(mensaje, parse_mode='Markdown')
+
+async def comando_borrar(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not context.args:
+        await update.message.reply_text("⚠️ Indica qué palabra borrar. Ejemplo: `/borrar 苹果`", parse_mode='Markdown')
+        return
+    
+    palabra_a_borrar = " ".join(context.args).strip()
+    if eliminar_palabra(palabra_a_borrar):
+        await update.message.reply_text(f"🗑️ La palabra '{palabra_a_borrar}' ha sido eliminada.")
+    else:
+        await update.message.reply_text(f"❌ No encontré la palabra '{palabra_a_borrar}' en tu lista.")
+
+# --- COMANDOS DE ACCIÓN ---
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
     registrar_interaccion(chat_id, "user", "/start")
     mensaje = (
-        "¡Hola! He sido optimizada para enfocarnos al 100% en tu meta: HSK 2 (3.0).\n\n"
-        "Comandos disponibles:\n"
-        "📚 /profesora - Estudiar palabras nuevas\n"
-        "🗣️ /amiga - Práctica Bola de Nieve (HSK 2)\n"
-        "📝 /examen - Simulacros HSK/HSKK\n"
-        "🧹 /reiniciar - Borrar memoria del chat\n\n"
-        "💡 *Nota:* Te enviaré píldoras de estudio automáticamente cada 2 horas."
+        "¡Hola! Soy Lexy, tu entrenadora situacional HSK 2.\n\n"
+        "🛠️ *Gestión de Palabras (Base de Datos):*\n"
+        "➕ /agregar palabra1, palabra2\n"
+        "👀 /lista - Ver todas tus palabras guardadas\n"
+        "🗑️ /borrar palabra - Eliminar una palabra\n\n"
+        "🚀 *Modos de Entrenamiento:*\n"
+        "🧩 /reto - Reto Situacional (Piezas de Lego con HSK 2)\n"
+        "🗣️ /amiga - Charla Bola de Nieve (Te obligaré a usar estructuras)\n"
+        "📚 /profesora - Analizar Palabra nueva\n"
+        "📝 /examen - Simulacros\n"
+        "🧹 /reiniciar - Borrar memoria del chat"
     )
     await update.message.reply_text(mensaje, parse_mode='Markdown')
-
-async def enviar_leccion_periodica(context: ContextTypes.DEFAULT_TYPE):
-    usuarios = obtener_todos_los_usuarios()
-    if not usuarios:
-        return
-        
-    palabra_hoy = random.choice(PALABRAS_HSK2)
-    prompt_armado = PROMPT_LECCION_PERIODICA.format(palabra_hoy=palabra_hoy)
-    
-    for chat_id in usuarios:
-        try:
-            # Generar contenido con Gemini
-            respuesta = client_gemini.models.generate_content(
-                model='gemini-3.5-flash-lite',
-                contents=prompt_armado
-            )
-            texto_salida = respuesta.text
-            registrar_interaccion(chat_id, "model", texto_salida)
-            
-            # Generar Audio
-            output_audio_path = f"leccion_{chat_id}.mp3"
-            matches = re.findall(r'<tts>(.*?)</tts>', texto_salida, re.DOTALL)
-            texto_para_audio = " ".join(matches).replace('*', '').strip() if matches else None
-            
-            if texto_para_audio:
-                # Velocidad 0.75x (-25%)
-                tts = edge_tts.Communicate(texto_para_audio, voice="zh-CN-XiaoxiaoNeural", rate="-25%")
-                await tts.save(output_audio_path)
-                with open(output_audio_path, "rb") as audio:
-                    await context.bot.send_voice(chat_id=chat_id, voice=audio, caption="📚 ¡Tu píldora de estudio HSK 2 ha llegado!")
-                os.remove(output_audio_path)
-            
-            texto_seguro = html.escape(texto_salida.replace('<tts>', '').replace('</tts>', '').strip())
-            await context.bot.send_message(chat_id=chat_id, text=texto_seguro, parse_mode='HTML')
-            
-        except Exception as e:
-            print(f"Error enviando lección a {chat_id}: {e}")
 
 async def reiniciar_historial(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
     user_id = update.effective_user.id
-    
     conn = sqlite3.connect(DB_FILE)
     cursor = conn.cursor()
     cursor.execute("DELETE FROM historial WHERE chat_id = ?", (chat_id,))
     conn.commit()
     conn.close()
-    
-    if user_id in user_sessions_gemini:
-        del user_sessions_gemini[user_id]
-        
-    if user_id in user_states:
-        user_states[user_id] = 'dialogo'
-        
-    await update.message.reply_text("🧹 <b>¡Historial borrado!</b>\n\nHe limpiado mi memoria de nuestra conversación anterior. ¿De qué quieres que hablemos ahora?", parse_mode='HTML')
+
+    if user_id in user_sessions_gemini: del user_sessions_gemini[user_id]
+    if user_id in user_states: user_states[user_id] = 'dialogo'
+    await update.message.reply_text("🧹 <b>¡Historial borrado!</b> Empecemos de cero.", parse_mode='HTML')
 
 async def set_modo_ensenanza(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     user_states[user_id] = 'ensenanza'
     user_sessions_gemini[user_id] = client_gemini.chats.create(model='gemini-3.5-flash-lite', config={'system_instruction': PROMPT_ENSENANZA})
-    await update.message.reply_text("📚 Modo Enseñanza HSK 2 activado. Envíame la palabra que deseas estudiar.")
+    await update.message.reply_text("📚 Modo Enseñanza. Envíame la palabra que deseas analizar.")
 
 async def set_modo_dialogo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     chat_id = update.effective_chat.id
     user_states[user_id] = 'dialogo'
-    
-    prompt_dinamico = PROMPT_DIALOGO_BASE.format(palabras_objetivo=", ".join(obtener_palabras_recientes(5)))
     historial = recuperar_historial(chat_id, limite=10)
+    user_sessions_gemini[user_id] = client_gemini.chats.create(model='gemini-3.5-flash-lite', history=historial, config={'system_instruction': PROMPT_DIALOGO_BASE})
+    await update.message.reply_text("🗣️ Modo Conversación. ¿Qué estás haciendo en este preciso instante? Cuéntamelo en chino.")
+
+async def set_modo_reto(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    chat_id = update.effective_chat.id
+    user_states[user_id] = 'reto'
     
-    user_sessions_gemini[user_id] = client_gemini.chats.create(
-        model='gemini-3.5-flash-lite',
-        history=historial,
-        config={'system_instruction': prompt_dinamico}
-    )
-    await update.message.reply_text("🗣️ Modo Bola de Nieve activado. ¡Hablemos! Prepárate para usar la gramática del HSK 2.")
+    palabras = obtener_palabras_aleatorias(3)
+    if not palabras:
+        await update.message.reply_text("⚠️ No tienes palabras guardadas. Usa `/agregar palabra1, palabra2` para alimentar tu base de datos.", parse_mode='Markdown')
+        return
+
+    regla_elegida = random.choice(REGLAS_HSK2)
+    instruccion_reto = f"Palabras aleatorias de la DB: {', '.join(palabras)}. Regla gramatical obligatoria a evaluar: {regla_elegida}. Preséntale el reto ahora mismo."
+    
+    user_sessions_gemini[user_id] = client_gemini.chats.create(model='gemini-3.5-flash-lite', config={'system_instruction': PROMPT_RETO_SITUACIONAL})
+    
+    await context.bot.send_chat_action(chat_id=chat_id, action='typing')
+    try:
+        respuesta = user_sessions_gemini[user_id].send_message(instruccion_reto)
+        registrar_interaccion(chat_id, "model", respuesta.text)
+        await update.message.reply_text(respuesta.text)
+    except Exception as e:
+        await update.message.reply_text(f"Error generando el reto: {str(e)}")
 
 async def set_modo_examen(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     user_states[user_id] = 'esperando_examen'
-    await update.message.reply_text("📝 ¿Qué examen quieres practicar hoy? Responde con *HSK* (escrito) o *HSKK* (oral).", parse_mode='Markdown')
+    await update.message.reply_text("📝 ¿Examen *HSK* (escrito) o *HSKK* (oral)?", parse_mode='Markdown')
 
 # --- PROCESAMIENTO CENTRAL ---
 async def process_interaction(update: Update, context: ContextTypes.DEFAULT_TYPE, input_data, is_audio=False, texto_original=""):
     user_id = update.effective_user.id
     chat_id = update.effective_chat.id
     current_mode = user_states.get(user_id, 'dialogo')
-    
-    # --- RUTEO DE SUB-ESTADOS PARA EXÁMENES ---
+
     if current_mode == 'esperando_examen':
         eleccion = texto_original.strip().upper()
         if eleccion == 'HSK':
             user_states[user_id] = 'esperando_nivel_hsk'
-            await update.message.reply_text("Has elegido HSK (Escrito). ¿Qué nivel deseas evaluar? Responde con *1, 2 o 3*.", parse_mode='Markdown')
+            await update.message.reply_text("Nivel HSK? (1, 2 o 3).")
         elif eleccion == 'HSKK':
             user_states[user_id] = 'esperando_nivel_hskk'
-            await update.message.reply_text("Has elegido HSKK (Oral). ¿Qué nivel deseas evaluar? Responde con *Básico* o *Intermedio*.", parse_mode='Markdown')
-        else:
-            await update.message.reply_text("Por favor, responde solo 'HSK' o 'HSKK'.")
+            await update.message.reply_text("Nivel HSKK? (Básico o Intermedio).")
         return
-
     if current_mode == 'esperando_nivel_hsk':
         nivel = texto_original.strip()
-        if nivel in ['1', '2', '3']:
-            user_states[user_id] = 'examen_hsk'
-            prompt_configurado = PROMPT_EXAMEN_HSK.format(nivel=nivel)
-            historial = recuperar_historial(chat_id, limite=10)
-            user_sessions_gemini[user_id] = client_gemini.chats.create(model='gemini-3.5-flash-lite', history=historial, config={'system_instruction': prompt_configurado})
-            await update.message.reply_text(f"Iniciando simulacro HSK Nivel {nivel}...")
-            input_data = f"¡Empecemos el examen HSK nivel {nivel}!"
-            current_mode = 'examen_hsk'
-        else:
-            await update.message.reply_text("Por favor, responde solo 1, 2 o 3.")
-            return
-
+        user_states[user_id] = 'examen_hsk'
+        user_sessions_gemini[user_id] = client_gemini.chats.create(model='gemini-3.5-flash-lite', history=recuperar_historial(chat_id, 10), config={'system_instruction': PROMPT_EXAMEN_HSK.format(nivel=nivel)})
+        await update.message.reply_text(f"Iniciando HSK {nivel}...")
+        input_data = f"¡Empecemos el examen HSK {nivel}!"
+        current_mode = 'examen_hsk'
     if current_mode == 'esperando_nivel_hskk':
         nivel = texto_original.strip().lower()
-        if nivel in ['básico', 'basico', 'intermedio']:
-            user_states[user_id] = 'examen_hskk'
-            nivel_limpio = 'Básico' if nivel in ['básico', 'basico'] else 'Intermedio'
-            prompt_configurado = PROMPT_EXAMEN_HSKK.format(nivel=nivel_limpio)
-            historial = recuperar_historial(chat_id, limite=10)
-            user_sessions_gemini[user_id] = client_gemini.chats.create(model='gemini-3.5-flash-lite', history=historial, config={'system_instruction': prompt_configurado})
-            await update.message.reply_text(f"Iniciando simulacro HSKK Nivel {nivel_limpio}...")
-            input_data = f"¡Empecemos el examen HSKK nivel {nivel_limpio}!"
-            current_mode = 'examen_hskk'
-        else:
-            await update.message.reply_text("Por favor, responde 'Básico' o 'Intermedio'.")
-            return
+        user_states[user_id] = 'examen_hskk'
+        nivel_limpio = 'Básico' if nivel in ['básico', 'basico'] else 'Intermedio'
+        user_sessions_gemini[user_id] = client_gemini.chats.create(model='gemini-3.5-flash-lite', history=recuperar_historial(chat_id, 10), config={'system_instruction': PROMPT_EXAMEN_HSKK.format(nivel=nivel_limpio)})
+        await update.message.reply_text(f"Iniciando HSKK {nivel_limpio}...")
+        input_data = f"¡Empecemos el HSKK {nivel_limpio}!"
+        current_mode = 'examen_hskk'
 
     await context.bot.send_chat_action(chat_id=chat_id, action='typing')
     texto_salida = ""
 
     try:
         if is_audio:
-            if current_mode in ['dialogo', 'examen_hsk']:
+            if current_mode in ['dialogo', 'examen_hsk', 'reto']:
                 resp_trans = client_gemini.models.generate_content(
                     model='gemini-3.5-flash-lite',
                     contents=[input_data, "Transcribe este audio. Devuelve SOLO el texto transcrito en chino, sin explicaciones ni comillas."]
                 )
                 instruccion = resp_trans.text.strip()
             else:
-                instruccion = [input_data, "Evalúa la pronunciación y responde al reto."]
+                instruccion = [input_data, "Evalúa la pronunciación y responde."]
         else:
             instruccion = input_data
 
-        texto_a_guardar = instruccion if isinstance(instruccion, str) else "[Mensaje de Voz HSKK]"
+        texto_a_guardar = instruccion if isinstance(instruccion, str) else "[Mensaje de Voz]"
         registrar_interaccion(chat_id, "user", texto_a_guardar)
 
         if user_id not in user_sessions_gemini:
-            prompt_dinamico = PROMPT_DIALOGO_BASE.format(palabras_objetivo="")
             historial = recuperar_historial(chat_id, limite=10)
-            user_sessions_gemini[user_id] = client_gemini.chats.create(model='gemini-3.5-flash-lite', history=historial, config={'system_instruction': prompt_dinamico})
+            user_sessions_gemini[user_id] = client_gemini.chats.create(model='gemini-3.5-flash-lite', history=historial, config={'system_instruction': PROMPT_DIALOGO_BASE})
 
         if current_mode == 'dialogo' and isinstance(instruccion, str):
-             instruccion += "\n\n(Regla obligatoria: Aplica el modelo bola de nieve para hacerme una pregunta y responde usando estrictamente el formato de 3 líneas empezando con <tts>Caracteres chinos</tts>)"
+             instruccion += "\n\n(Aplica el modelo bola de nieve obligándome a usar estructuras del HSK 2. Responde estrictamente con <tts>Caracteres chinos</tts>)"
 
         respuesta = user_sessions_gemini[user_id].send_message(instruccion)
         texto_salida = respuesta.text
 
         if not texto_salida:
-            await update.message.reply_text("Corte de conexión. ¿Puedes repetirlo?")
+            await update.message.reply_text("Error de conexión.")
             return
-            
+
         registrar_interaccion(chat_id, "model", texto_salida)
 
+        # Manejo de imágenes HSKK
         match_hskk_img = re.search(r'<hskk_img>(.*?)</hskk_img>', texto_salida)
         if match_hskk_img:
             prompt_img = match_hskk_img.group(1).replace(" ", "%20")
@@ -355,26 +339,21 @@ async def process_interaction(update: Update, context: ContextTypes.DEFAULT_TYPE
             await context.bot.send_photo(chat_id=chat_id, photo=url_img)
             texto_salida = re.sub(r'<hskk_img>.*?</hskk_img>', '', texto_salida)
 
+        # TTS y Audios
         match_hskk_audio = re.search(r'<hskk_audio>(.*?)</hskk_audio>', texto_salida)
-        texto_para_audio = None
-        if match_hskk_audio:
-            texto_para_audio = match_hskk_audio.group(1)
-            texto_salida = re.sub(r'<hskk_audio>.*?</hskk_audio>', '', texto_salida)
+        texto_para_audio = match_hskk_audio.group(1) if match_hskk_audio else None
+        if match_hskk_audio: texto_salida = re.sub(r'<hskk_audio>.*?</hskk_audio>', '', texto_salida)
 
         matches_tts = re.findall(r'<tts>(.*?)</tts>', texto_salida, re.DOTALL)
         if matches_tts and not texto_para_audio:
              texto_para_audio = " ".join(matches_tts)
         elif current_mode == 'dialogo' and not texto_para_audio:
              caracteres_chinos = re.findall(r'[\u4e00-\u9fa5，。！？、]+', texto_salida)
-             if caracteres_chinos:
-                 texto_para_audio = "".join(caracteres_chinos)
-             else:
-                 texto_para_audio = None
+             texto_para_audio = "".join(caracteres_chinos) if caracteres_chinos else None
 
         if texto_para_audio:
             await context.bot.send_chat_action(chat_id=chat_id, action='record_voice')
             out_audio = f"resp_{user_id}.mp3"
-            # Audio siempre a 0.75x
             tts = edge_tts.Communicate(texto_para_audio.replace('*', ''), voice="zh-CN-XiaoxiaoNeural", rate="-25%")
             await tts.save(out_audio)
             with open(out_audio, "rb") as audio:
@@ -383,70 +362,65 @@ async def process_interaction(update: Update, context: ContextTypes.DEFAULT_TYPE
 
         texto_limpio = texto_salida.replace('<tts>', '').replace('</tts>', '').strip()
         texto_seguro = html.escape(texto_limpio)
-        
+
         if current_mode == 'dialogo':
             await context.bot.send_message(chat_id=chat_id, text=f"<tg-spoiler>{texto_seguro}</tg-spoiler>", parse_mode='HTML')
         else:
             await context.bot.send_message(chat_id=chat_id, text=texto_seguro, parse_mode='HTML')
-            
+
     except Exception as e:
         await update.message.reply_text(f"Hubo un error: {str(e)}")
 
 async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     texto = update.message.text
-    if ',' in texto:
-        palabras = [p.strip() for p in texto.split(',') if p.strip()]
-        if len(palabras) > 1:
-            for p in palabras: guardar_palabra(p)
-            await update.message.reply_text(f"✅ {len(palabras)} palabras guardadas.")
-            return
-
     current_mode = user_states.get(update.effective_user.id, 'dialogo')
+    
+    # En modo enseñanza, si envías una palabra sola, igual la guardamos para tu DB
     if current_mode == 'ensenanza':
-        guardar_palabra(texto)
-        
+        guardar_palabra(texto.strip())
+
     await process_interaction(update, context, texto, is_audio=False, texto_original=texto)
 
 async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     input_audio_path = f"input_{user_id}.ogg"
-    
     voice_file = await context.bot.get_file(update.message.voice.file_id)
     await voice_file.download_to_drive(input_audio_path)
-    
     audio_part = client_gemini.files.upload(file=input_audio_path, config={'mime_type': 'audio/ogg'})
     await process_interaction(update, context, audio_part, is_audio=True)
-    
     os.remove(input_audio_path)
 
 async def configurar_menu(application: Application):
     await application.bot.set_my_commands([
-        BotCommand("profesora", "📚 Modo Enseñanza"),
-        BotCommand("amiga", "🗣️ Modo Conversación"),
+        BotCommand("reto", "🧩 Reto Situacional HSK 2"),
+        BotCommand("agregar", "➕ Añadir palabra(s) a la DB"),
+        BotCommand("lista", "👀 Ver palabras guardadas"),
+        BotCommand("borrar", "🗑️ Eliminar una palabra"),
+        BotCommand("amiga", "🗣️ Charla Bola de Nieve"),
+        BotCommand("profesora", "📚 Analizar Palabra"),
         BotCommand("examen", "📝 Examen HSK/HSKK"),
         BotCommand("reiniciar", "🧹 Borrar memoria"),
-        BotCommand("start", "🔄 Inicio")
     ])
 
 def main():
     init_db()
-    
-    # Se añade job_queue al constructor de la aplicación
     app = Application.builder().token(TELEGRAM_TOKEN).post_init(configurar_menu).build()  
     
     app.add_handler(CommandHandler("start", start))
+    app.add_handler(CommandHandler("reto", set_modo_reto))
+    app.add_handler(CommandHandler("agregar", comando_agregar))
+    app.add_handler(CommandHandler("lista", comando_lista))
+    app.add_handler(CommandHandler("borrar", comando_borrar))
     app.add_handler(CommandHandler("profesora", set_modo_ensenanza))
     app.add_handler(CommandHandler("amiga", set_modo_dialogo))
     app.add_handler(CommandHandler("examen", set_modo_examen))
     app.add_handler(CommandHandler("reiniciar", reiniciar_historial)) 
     
+    # Removido el filtro de comas para evitar bugs. Todo el texto va al procesador.
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
     app.add_handler(MessageHandler(filters.VOICE, handle_voice))
-    
-    # Programa el envío automático cada 2 horas (43200 segundos). El primero iniciará a los 10 segundos para probar que funciona.
-    app.job_queue.run_repeating(enviar_leccion_periodica, interval=7200, first=10)
-    
-    print("Lexy enfocada en HSK 2 Trabajando...")
+
+    print("Lexy Situacional (DB Optimizada) Trabajando...")
     app.run_polling()
 
 if __name__ == "__main__":
